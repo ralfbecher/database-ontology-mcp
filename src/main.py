@@ -1,88 +1,242 @@
-"""Main MCP server application using FastMCP."""
+"""Main MCP server application using FastMCP with enhanced error handling and security."""
 
-import asyncio
 import json
 import logging
-import os
-from typing import Optional, List, Dict, Any
+import sys
 from contextlib import contextmanager
-from fastmcp import FastMCP
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from fastmcp import FastMCP
+from pydantic import BaseModel, Field, ValidationError
+
+from .config import config_manager
+from .constants import (
+    SUPPORTED_DB_TYPES, 
+    DEFAULT_SAMPLE_LIMIT, 
+    MAX_ENRICHMENT_SAMPLES,
+    MAX_SAMPLE_LIMIT
+)
 from .database_manager import DatabaseManager, TableInfo
 from .ontology_generator import OntologyGenerator
+from .utils import setup_logging, sanitize_for_logging
 
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, log_level),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Initialize logging
+config = config_manager.get_server_config()
+logger = setup_logging(config.log_level)
 
 # --- MCP Server Setup ---
-
 mcp = FastMCP("Database Ontology MCP Server")
 
-# --- Dependency Management ---
+# --- Dependency Management with Connection Pooling ---
 
 class ServerState:
-    """Manages server state and dependencies."""
+    """Manages server state and dependencies with improved resource management."""
     
     def __init__(self):
         self._db_manager: Optional[DatabaseManager] = None
-        self._ontology_generator: Optional[OntologyGenerator] = None
+        self._thread_pool: Optional[ThreadPoolExecutor] = None
+        self._max_workers = 4
+    
+    @property
+    def thread_pool(self) -> ThreadPoolExecutor:
+        """Get or create thread pool for async operations."""
+        if self._thread_pool is None:
+            self._thread_pool = ThreadPoolExecutor(max_workers=self._max_workers)
+        return self._thread_pool
     
     def get_db_manager(self) -> DatabaseManager:
         """Get or create database manager instance."""
         if self._db_manager is None:
             self._db_manager = DatabaseManager()
+            logger.debug("Created new DatabaseManager instance")
         return self._db_manager
     
-    def get_ontology_generator(self, base_uri: str = "http://example.com/ontology/") -> OntologyGenerator:
+    def get_ontology_generator(self, base_uri: Optional[str] = None) -> OntologyGenerator:
         """Get ontology generator instance."""
-        # Always create new instance to avoid state pollution
-        return OntologyGenerator(base_uri=base_uri)
+        uri = base_uri or config.ontology_base_uri
+        return OntologyGenerator(base_uri=uri)
     
     def cleanup(self):
         """Clean up resources."""
-        if self._db_manager:
-            self._db_manager.disconnect()
-            self._db_manager = None
-        self._ontology_generator = None
+        try:
+            if self._db_manager:
+                self._db_manager.disconnect()
+                self._db_manager = None
+                logger.debug("DatabaseManager cleaned up")
+            
+            if self._thread_pool:
+                self._thread_pool.shutdown(wait=True)
+                self._thread_pool = None
+                logger.debug("ThreadPool cleaned up")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
 # Global server state
 _server_state = ServerState()
 
-# --- Error Response Helper ---
+# --- Enhanced Error Response Models ---
 
 class ErrorResponse(BaseModel):
     """Standardized error response format."""
     error: str
     error_type: str = "unknown"
     details: Optional[str] = None
+    timestamp: Optional[str] = None
+    request_id: Optional[str] = None
 
-def create_error_response(error_msg: str, error_type: str = "unknown", details: Optional[str] = None) -> str:
+class ValidationErrorResponse(ErrorResponse):
+    """Validation error response with field details."""
+    error_type: str = "validation_error"
+    field_errors: Optional[Dict[str, List[str]]] = None
+
+class ConnectionErrorResponse(ErrorResponse):
+    """Connection error response."""
+    error_type: str = "connection_error"
+    retry_after: Optional[int] = None
+
+def create_error_response(
+    error_msg: str, 
+    error_type: str = "unknown", 
+    details: Optional[str] = None,
+    **kwargs
+) -> str:
     """Create a standardized error response."""
-    response = ErrorResponse(error=error_msg, error_type=error_type, details=details)
+    response = ErrorResponse(
+        error=error_msg, 
+        error_type=error_type, 
+        details=details,
+        **kwargs
+    )
     return response.model_dump_json()
 
-def safe_execute(func, *args, **kwargs):
-    """Helper function to safely execute MCP tool functions with error handling."""
+@contextmanager
+def error_handler(operation_name: str):
+    """Context manager for consistent error handling."""
     try:
-        return func(*args, **kwargs)
+        yield
+    except ValidationError as e:
+        error_msg = f"Validation error in {operation_name}"
+        logger.error(f"{error_msg}: {e}")
+        return create_error_response(
+            error_msg,
+            "validation_error",
+            str(e)
+        )
+    except ValueError as e:
+        error_msg = f"Invalid input in {operation_name}"
+        logger.error(f"{error_msg}: {e}")
+        return create_error_response(
+            error_msg,
+            "validation_error",
+            str(e)
+        )
     except RuntimeError as e:
-        logger.error(f"Runtime error in {func.__name__}: {e}")
-        return create_error_response(str(e), "runtime_error")
+        error_msg = f"Runtime error in {operation_name}"
+        logger.error(f"{error_msg}: {e}")
+        return create_error_response(
+            error_msg,
+            "runtime_error",
+            str(e)
+        )
+    except ConnectionError as e:
+        error_msg = f"Connection error in {operation_name}"
+        logger.error(f"{error_msg}: {e}")
+        return create_error_response(
+            error_msg,
+            "connection_error",
+            str(e)
+        )
     except Exception as e:
-        logger.error(f"Unexpected error in {func.__name__}: {e}")
-        return create_error_response(f"Internal server error: {str(e)}", "internal_error")
+        error_msg = f"Unexpected error in {operation_name}"
+        logger.error(f"{error_msg}: {type(e).__name__}: {e}")
+        return create_error_response(
+            error_msg,
+            "internal_error",
+            f"{type(e).__name__}: {str(e)}"
+        )
 
-# --- MCP Tools ---
+# --- MCP Prompts ---
+
+@mcp.prompt()
+def ontology_enrichment_guide() -> str:
+    """Provides guidance for enriching database ontologies with meaningful names and descriptions."""
+    return """You are an expert in ontology engineering and database schema analysis. 
+
+Your task is to analyze database schema information and provide enrichment suggestions to make the ontology more meaningful and semantically rich.
+
+When analyzing database schemas, consider:
+
+1. **Business Domain Context**: Look at table and column names to understand the business domain
+2. **Data Relationships**: Analyze foreign key relationships to understand entity connections  
+3. **Data Types and Constraints**: Use column types, nullability, and keys to infer semantic meaning
+4. **Sample Data**: Examine actual data values to better understand the purpose of each field
+
+For ontology enrichment, provide suggestions in this exact JSON format:
+
+```json
+{
+  "classes": [
+    {
+      "original_name": "table_name",
+      "suggested_name": "MeaningfulClassName", 
+      "description": "Clear description of what this entity represents"
+    }
+  ],
+  "properties": [
+    {
+      "table_name": "table_name",
+      "original_name": "column_name",
+      "suggested_name": "meaningfulPropertyName",
+      "description": "Clear description of what this property represents"
+    }
+  ],
+  "relationships": [
+    {
+      "from_table": "source_table",
+      "to_table": "target_table", 
+      "suggested_name": "meaningfulRelationshipName",
+      "description": "Clear description of what this relationship represents"
+    }
+  ]
+}
+```
+
+**Naming Guidelines:**
+- Class names: PascalCase (e.g., CustomerOrder, ProductCategory)
+- Property names: camelCase (e.g., firstName, createdDateTime)
+- Relationship names: camelCase (e.g., belongsToCustomer, hasOrderItems)
+- Use domain-specific terminology when appropriate
+- Avoid abbreviations unless they're standard in the domain
+
+**Description Guidelines:**
+- Be specific about the business purpose
+- Explain constraints and business rules when evident
+- Mention cardinality and optionality implications
+- Reference related entities to provide context"""
+
+@mcp.prompt()
+def ontology_analysis_prompt(schema_data: Dict[str, Any]) -> str:
+    """Analyzes database schema data to provide ontology enrichment suggestions."""
+    return f"""Please analyze the following database schema and provide ontology enrichment suggestions.
+
+**Database Schema Information:**
+{json.dumps(schema_data.get('schema_data', []), indent=2, default=str)}
+
+**Instructions:**
+{schema_data.get('instructions', {}).get('task', 'Analyze and enrich the ontology')}
+
+**Expected Response Format:**
+The response must be a valid JSON object with exactly these three keys: "classes", "properties", and "relationships". Each should contain arrays of suggestion objects as shown in the example format.
+
+**Guidelines:**
+{chr(10).join('- ' + guideline for guideline in schema_data.get('instructions', {}).get('guidelines', []))}
+
+Analyze the schema carefully, considering table names, column types, relationships, and any sample data provided. Focus on the most important and commonly-used entities first.
+
+Provide meaningful, business-oriented names and descriptions that would make sense to domain experts."""
+
+# --- Enhanced MCP Tools with Better Validation ---
 
 @mcp.tool()
 def connect_database(
@@ -94,92 +248,122 @@ def connect_database(
     password: Optional[str] = None,
     account: Optional[str] = None,
     warehouse: Optional[str] = None,
-    schema: Optional[str] = "PUBLIC"
+    schema: Optional[str] = None
 ) -> str:
-    """Connect to a database (PostgreSQL or Snowflake) and return connection status.
+    """Connect to a database (PostgreSQL or Snowflake) with enhanced validation and security.
     
     Args:
-        db_type: Database type - either 'postgresql' or 'snowflake'
-        host: Database host (for PostgreSQL)
-        port: Database port (for PostgreSQL)
-        database: Database name
-        username: Database username
-        password: Database password
-        account: Snowflake account identifier (for Snowflake)
-        warehouse: Snowflake warehouse (for Snowflake)
-        schema: Database schema (default: PUBLIC for Snowflake, public for PostgreSQL)
+        db_type: Database type - must be 'postgresql' or 'snowflake'
+        host: Database host (required for PostgreSQL)
+        port: Database port (required for PostgreSQL)
+        database: Database name (required)
+        username: Database username (required)
+        password: Database password (required)
+        account: Snowflake account identifier (required for Snowflake)
+        warehouse: Snowflake warehouse (required for Snowflake)
+        schema: Database schema (optional, defaults based on database type)
     
     Returns:
-        Connection status message or error JSON
+        Success message or error JSON
     """
-    # Validate input parameters
-    if not db_type or db_type not in ["postgresql", "snowflake"]:
-        return create_error_response(
-            f"Invalid database type '{db_type}'. Use 'postgresql' or 'snowflake'.",
-            "validation_error"
-        )
-    
-    db_manager = _server_state.get_db_manager()
-    
-    if db_type == "postgresql":
-        # Validate required parameters for PostgreSQL
-        required_params = {"host": host, "port": port, "database": database, "username": username, "password": password}
-        missing_params = [k for k, v in required_params.items() if v is None]
-        if missing_params:
+    with error_handler("connect_database") as handler:
+        # Validate database type
+        if not db_type or db_type not in SUPPORTED_DB_TYPES:
             return create_error_response(
-                f"Missing required parameters for PostgreSQL: {', '.join(missing_params)}",
+                f"Invalid database type '{db_type}'. Supported types: {', '.join(SUPPORTED_DB_TYPES)}",
                 "validation_error"
             )
         
-        success = db_manager.connect_postgresql(
-            host=str(host),
-            port=int(port),
-            database=str(database),
-            username=str(username),
-            password=str(password)
-        )
-    elif db_type == "snowflake":
-        # Validate required parameters for Snowflake
-        required_params = {"account": account, "username": username, "password": password, "warehouse": warehouse, "database": database}
-        missing_params = [k for k, v in required_params.items() if v is None]
-        if missing_params:
-            return create_error_response(
-                f"Missing required parameters for Snowflake: {', '.join(missing_params)}",
-                "validation_error"
-            )
+        db_manager = _server_state.get_db_manager()
         
-        success = db_manager.connect_snowflake(
-            account=str(account),
-            username=str(username),
-            password=str(password),
-            warehouse=str(warehouse),
-            database=str(database),
-            schema=schema or "PUBLIC"
-        )
-
-    if success:
-        return f"Successfully connected to {db_type} database: {database}"
-    else:
-        return create_error_response(
-            f"Failed to connect to {db_type} database: {database}",
-            "connection_error"
-        )
-
+        # Use configuration validation
+        try:
+            config_validation = config_manager.validate_db_config(db_type)
+            if not config_validation["valid"]:
+                # Check if parameters were provided directly
+                if db_type == "postgresql":
+                    required_params = {"host": host, "port": port, "database": database, 
+                                     "username": username, "password": password}
+                else:  # snowflake
+                    required_params = {"account": account, "username": username, "password": password,
+                                     "warehouse": warehouse, "database": database}
+                
+                missing_direct = [k for k, v in required_params.items() if v is None]
+                if missing_direct:
+                    return create_error_response(
+                        f"Missing required parameters for {db_type}: {', '.join(missing_direct)}",
+                        "validation_error",
+                        "Provide parameters directly or set environment variables"
+                    )
+        except ValueError as e:
+            return create_error_response(str(e), "validation_error")
+        
+        # Attempt connection
+        try:
+            if db_type == "postgresql":
+                success = db_manager.connect_postgresql(
+                    host=str(host),
+                    port=int(port) if port else 5432,
+                    database=str(database),
+                    username=str(username),
+                    password=str(password)
+                )
+            else:  # snowflake
+                success = db_manager.connect_snowflake(
+                    account=str(account),
+                    username=str(username),
+                    password=str(password),
+                    warehouse=str(warehouse),
+                    database=str(database),
+                    schema=schema or "PUBLIC"
+                )
+            
+            if success:
+                safe_info = sanitize_for_logging({
+                    "db_type": db_type,
+                    "database": database,
+                    "host": host if db_type == "postgresql" else None,
+                    "account": account if db_type == "snowflake" else None
+                })
+                logger.info(f"Successfully connected to {db_type}: {safe_info}")
+                return f"Successfully connected to {db_type} database: {database}"
+            else:
+                return create_error_response(
+                    f"Failed to connect to {db_type} database: {database}",
+                    "connection_error",
+                    "Check connection parameters and network connectivity"
+                )
+                
+        except Exception as e:
+            logger.error(f"Connection attempt failed: {type(e).__name__}: {e}")
+            return create_error_response(
+                f"Connection failed: {type(e).__name__}",
+                "connection_error",
+                str(e)
+            )
 
 @mcp.tool()
-def list_schemas() -> List[str]:
+def list_schemas() -> Union[List[str], str]:
     """Get a list of available schemas from the connected database.
     
     Returns:
         List of schema names or error response
     """
-    db_manager = _server_state.get_db_manager()
-    schemas = db_manager.get_schemas()
-    return schemas if schemas else []
-
+    with error_handler("list_schemas") as handler:
+        db_manager = _server_state.get_db_manager()
+        try:
+            schemas = db_manager.get_schemas()
+            logger.debug(f"Retrieved {len(schemas)} schemas")
+            return schemas if schemas else []
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
 
 @mcp.tool()
-def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
+def analyze_schema(schema_name: Optional[str] = None) -> Union[Dict[str, Any], str]:
     """Analyze a database schema and return detailed table information.
     
     Args:
@@ -188,124 +372,183 @@ def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
     Returns:
         Dictionary containing tables and their detailed information or error response
     """
-    db_manager = _server_state.get_db_manager()
-    tables = db_manager.get_tables(schema_name)
-    
-    all_table_info = []
-    for table_name in tables:
-        table_info = db_manager.analyze_table(table_name, schema_name)
-        if table_info:
-            # Convert dataclass to dict for JSON serialization
-            table_dict = {
-                "name": table_info.name,
-                "schema": table_info.schema,
-                "columns": [
-                    {
-                        "name": col.name,
-                        "data_type": col.data_type,
-                        "is_nullable": col.is_nullable,
-                        "is_primary_key": col.is_primary_key,
-                        "is_foreign_key": col.is_foreign_key,
-                        "foreign_key_table": col.foreign_key_table,
-                        "foreign_key_column": col.foreign_key_column,
-                        "comment": col.comment
-                    } for col in table_info.columns
-                ],
-                "primary_keys": table_info.primary_keys,
-                "foreign_keys": table_info.foreign_keys,
-                "comment": table_info.comment,
-                "row_count": table_info.row_count
+    with error_handler("analyze_schema") as handler:
+        db_manager = _server_state.get_db_manager()
+        try:
+            tables = db_manager.get_tables(schema_name)
+            logger.debug(f"Found {len(tables)} tables in schema '{schema_name or 'default'}'")
+            
+            # Parallel table analysis for better performance
+            all_table_info = []
+            with _server_state.thread_pool as executor:
+                future_to_table = {
+                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
+                    for table_name in tables
+                }
+                
+                for future in as_completed(future_to_table):
+                    table_name = future_to_table[future]
+                    try:
+                        table_info = future.result()
+                        if table_info:
+                            # Convert dataclass to dict for JSON serialization
+                            table_dict = {
+                                "name": table_info.name,
+                                "schema": table_info.schema,
+                                "columns": [
+                                    {
+                                        "name": col.name,
+                                        "data_type": col.data_type,
+                                        "is_nullable": col.is_nullable,
+                                        "is_primary_key": col.is_primary_key,
+                                        "is_foreign_key": col.is_foreign_key,
+                                        "foreign_key_table": col.foreign_key_table,
+                                        "foreign_key_column": col.foreign_key_column,
+                                        "comment": col.comment
+                                    } for col in table_info.columns
+                                ],
+                                "primary_keys": table_info.primary_keys,
+                                "foreign_keys": table_info.foreign_keys,
+                                "comment": table_info.comment,
+                                "row_count": table_info.row_count
+                            }
+                            all_table_info.append(table_dict)
+                    except Exception as e:
+                        logger.warning(f"Failed to analyze table {table_name}: {e}")
+            
+            result = {
+                "schema": schema_name or "default",
+                "table_count": len(all_table_info),
+                "tables": all_table_info
             }
-            all_table_info.append(table_dict)
-    
-    return {
-        "schema": schema_name or "default",
-        "table_count": len(all_table_info),
-        "tables": all_table_info
-    }
-
+            
+            logger.info(f"Successfully analyzed schema '{schema_name or 'default'}': {len(all_table_info)} tables")
+            return result
+            
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
 
 @mcp.tool()
 def generate_ontology(
     schema_name: Optional[str] = None,
-    base_uri: str = "http://example.com/ontology/",
+    base_uri: Optional[str] = None,
     enrich_llm: bool = False
 ) -> str:
     """Generate an RDF ontology from the database schema.
     
     Args:
         schema_name: Name of the schema to generate ontology from (optional)
-        base_uri: Base URI for the ontology (default: http://example.com/ontology/)
+        base_uri: Base URI for the ontology (optional, uses config default)
         enrich_llm: Whether to enrich the ontology with LLM insights (default: False)
     
     Returns:
         RDF ontology in Turtle format or error response
     """
-    # Validate base_uri
-    if not base_uri.endswith('/'):
-        base_uri += '/'
-    
-    db_manager = _server_state.get_db_manager()
-    tables = db_manager.get_tables(schema_name)
-
-    tables_info = []
-    for table_name in tables:
-        table_info = db_manager.analyze_table(table_name, schema_name)
-        if table_info:
-            tables_info.append(table_info)
-
-    if not tables_info:
-        return create_error_response(
-            f"No tables found in schema '{schema_name or 'default'}' to generate ontology",
-            "data_error"
-        )
-
-    generator = _server_state.get_ontology_generator(base_uri=base_uri)
-    ontology_ttl = generator.generate_from_schema(tables_info)
-
-    if enrich_llm:
-        data_samples = {}
-        for table in tables_info:
-            try:
-                data_samples[table.name] = db_manager.sample_table_data(table.name, schema_name, limit=5)
-            except Exception as e:
-                logger.warning(f"Could not sample data from table {table.name}: {e}")
+    with error_handler("generate_ontology") as handler:
+        db_manager = _server_state.get_db_manager()
         
-        ontology_ttl = generator.enrich_with_llm(tables_info, data_samples)
-
-    return ontology_ttl
-
+        try:
+            tables = db_manager.get_tables(schema_name)
+            if not tables:
+                return create_error_response(
+                    f"No tables found in schema '{schema_name or 'default'}'",
+                    "data_error",
+                    "Schema may not exist or may be empty"
+                )
+            
+            # Parallel table analysis
+            tables_info = []
+            with _server_state.thread_pool as executor:
+                future_to_table = {
+                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
+                    for table_name in tables
+                }
+                
+                for future in as_completed(future_to_table):
+                    try:
+                        table_info = future.result()
+                        if table_info:
+                            tables_info.append(table_info)
+                    except Exception as e:
+                        logger.warning(f"Failed to analyze table: {e}")
+            
+            if not tables_info:
+                return create_error_response(
+                    f"Could not analyze any tables in schema '{schema_name or 'default'}'",
+                    "data_error"
+                )
+            
+            # Generate ontology
+            generator = _server_state.get_ontology_generator(base_uri)
+            ontology_ttl = generator.generate_from_schema(tables_info)
+            
+            if enrich_llm:
+                # Sample data for enrichment
+                data_samples = {}
+                for table in tables_info[:10]:  # Limit to first 10 tables for performance
+                    try:
+                        samples = db_manager.sample_table_data(
+                            table.name, 
+                            schema_name, 
+                            limit=MAX_ENRICHMENT_SAMPLES
+                        )
+                        if samples:
+                            data_samples[table.name] = samples
+                    except Exception as e:
+                        logger.warning(f"Could not sample data from table {table.name}: {e}")
+                
+                try:
+                    ontology_ttl = generator.enrich_with_llm(tables_info, data_samples)
+                except Exception as e:
+                    logger.warning(f"LLM enrichment failed, using basic ontology: {e}")
+            
+            logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
+            return ontology_ttl
+            
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
 
 @mcp.tool()
 def sample_table_data(
     table_name: str,
     schema_name: Optional[str] = None,
-    limit: int = 10
-) -> List[Dict[str, Any]]:
+    limit: int = DEFAULT_SAMPLE_LIMIT
+) -> Union[List[Dict[str, Any]], str]:
     """Sample data from a specific table for analysis.
     
     Args:
-        table_name: Name of the table to sample
+        table_name: Name of the table to sample (required)
         schema_name: Schema containing the table (optional)
-        limit: Maximum number of rows to return (default: 10, max: 100)
+        limit: Maximum number of rows to return (default: 10, max: 1000)
     
     Returns:
         List of sample rows as dictionaries or error response
     """
-    # Validate parameters
-    if not table_name:
-        return [{"error": "Table name is required"}]
-    
-    if limit <= 0 or limit > 100:
-        limit = 10
-    
-    db_manager = _server_state.get_db_manager()
-    sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
-    return sample_data
-
+    with error_handler("sample_table_data") as handler:
+        if not table_name:
+            return create_error_response(
+                "Table name is required",
+                "validation_error"
+            )
+        
+        db_manager = _server_state.get_db_manager()
+        try:
+            sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
+            logger.debug(f"Sampled {len(sample_data)} rows from {table_name}")
+            return sample_data
+        except (ValueError, RuntimeError) as e:
+            return create_error_response(str(e), "validation_error")
 
 @mcp.tool()
-def get_table_relationships(schema_name: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
+def get_table_relationships(schema_name: Optional[str] = None) -> Union[Dict[str, List[Dict[str, str]]], str]:
     """Get foreign key relationships between tables in a schema.
     
     Args:
@@ -314,10 +557,176 @@ def get_table_relationships(schema_name: Optional[str] = None) -> Dict[str, List
     Returns:
         Dictionary mapping table names to their foreign key relationships or error response
     """
-    db_manager = _server_state.get_db_manager()
-    relationships = db_manager.get_table_relationships(schema_name)
-    return relationships
+    with error_handler("get_table_relationships") as handler:
+        db_manager = _server_state.get_db_manager()
+        try:
+            relationships = db_manager.get_table_relationships(schema_name)
+            logger.debug(f"Retrieved relationships for {len(relationships)} tables")
+            return relationships
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
 
+@mcp.tool()
+def get_enrichment_data(schema_name: Optional[str] = None) -> Union[Dict[str, Any], str]:
+    """Get structured data for ontology enrichment analysis.
+    
+    Args:
+        schema_name: Name of the schema to get enrichment data for (optional)
+    
+    Returns:
+        Dictionary containing schema data and enrichment instructions or error response
+    """
+    with error_handler("get_enrichment_data") as handler:
+        db_manager = _server_state.get_db_manager()
+        
+        try:
+            tables = db_manager.get_tables(schema_name)
+            if not tables:
+                return create_error_response(
+                    f"No tables found in schema '{schema_name or 'default'}'",
+                    "data_error"
+                )
+            
+            # Analyze tables in parallel
+            tables_info = []
+            with _server_state.thread_pool as executor:
+                future_to_table = {
+                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
+                    for table_name in tables
+                }
+                
+                for future in as_completed(future_to_table):
+                    try:
+                        table_info = future.result()
+                        if table_info:
+                            tables_info.append(table_info)
+                    except Exception as e:
+                        logger.warning(f"Failed to analyze table: {e}")
+            
+            if not tables_info:
+                return create_error_response(
+                    f"Could not analyze any tables in schema '{schema_name or 'default'}'",
+                    "data_error"
+                )
+            
+            # Get sample data for enrichment
+            data_samples = {}
+            for table in tables_info[:10]:  # Limit for performance
+                try:
+                    samples = db_manager.sample_table_data(
+                        table.name, 
+                        schema_name, 
+                        limit=MAX_ENRICHMENT_SAMPLES
+                    )
+                    if samples:
+                        data_samples[table.name] = samples
+                except Exception as e:
+                    logger.warning(f"Could not sample data from table {table.name}: {e}")
+            
+            generator = _server_state.get_ontology_generator()
+            enrichment_data = generator.get_enrichment_data(tables_info, data_samples)
+            
+            logger.info(f"Generated enrichment data for {len(tables_info)} tables")
+            return enrichment_data
+            
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
+
+@mcp.tool()
+def apply_ontology_enrichment(
+    schema_name: Optional[str] = None,
+    base_uri: Optional[str] = None,
+    enrichment_suggestions: Optional[Dict[str, Any]] = None
+) -> str:
+    """Apply enrichment suggestions to generate an enriched ontology.
+    
+    Args:
+        schema_name: Name of the schema to generate ontology from (optional)
+        base_uri: Base URI for the ontology (optional)
+        enrichment_suggestions: Dictionary containing enrichment suggestions
+    
+    Returns:
+        Enriched RDF ontology in Turtle format or error response
+    """
+    with error_handler("apply_ontology_enrichment") as handler:
+        if not enrichment_suggestions:
+            return create_error_response(
+                "enrichment_suggestions parameter is required",
+                "validation_error"
+            )
+        
+        # Validate enrichment suggestions structure
+        required_keys = {"classes", "properties", "relationships"}
+        if not all(key in enrichment_suggestions for key in required_keys):
+            missing = required_keys - set(enrichment_suggestions.keys())
+            return create_error_response(
+                f"Missing required keys in enrichment_suggestions: {missing}",
+                "validation_error"
+            )
+        
+        db_manager = _server_state.get_db_manager()
+        
+        try:
+            tables = db_manager.get_tables(schema_name)
+            if not tables:
+                return create_error_response(
+                    f"No tables found in schema '{schema_name or 'default'}'",
+                    "data_error"
+                )
+            
+            # Analyze tables
+            tables_info = []
+            with _server_state.thread_pool as executor:
+                future_to_table = {
+                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
+                    for table_name in tables
+                }
+                
+                for future in as_completed(future_to_table):
+                    try:
+                        table_info = future.result()
+                        if table_info:
+                            tables_info.append(table_info)
+                    except Exception as e:
+                        logger.warning(f"Failed to analyze table: {e}")
+            
+            if not tables_info:
+                return create_error_response(
+                    f"Could not analyze any tables in schema '{schema_name or 'default'}'",
+                    "data_error"
+                )
+            
+            # Generate and enrich ontology
+            generator = _server_state.get_ontology_generator(base_uri)
+            base_ontology = generator.generate_from_schema(tables_info)
+            
+            try:
+                generator.apply_enrichment(enrichment_suggestions)
+                enriched_ontology = generator.serialize_ontology()
+                logger.info(f"Applied enrichment to ontology with {len(enrichment_suggestions.get('classes', []))} class suggestions")
+                return enriched_ontology
+            except Exception as e:
+                logger.error(f"Error applying enrichment: {e}")
+                return create_error_response(
+                    "Failed to apply enrichment suggestions",
+                    "enrichment_error",
+                    str(e)
+                )
+                
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
 
 @mcp.tool()
 def get_server_info() -> Dict[str, Any]:
@@ -328,15 +737,18 @@ def get_server_info() -> Dict[str, Any]:
     """
     return {
         "name": "Database Ontology MCP Server",
-        "version": "0.1.0",
-        "description": "MCP server for database schema analysis and ontology generation",
-        "supported_databases": ["postgresql", "snowflake"],
+        "version": "0.2.0",
+        "description": "Enhanced MCP server for database schema analysis and ontology generation",
+        "supported_databases": SUPPORTED_DB_TYPES,
         "features": [
-            "Database connection management",
-            "Schema analysis",
-            "Table relationship mapping",
-            "RDF/OWL ontology generation",
-            "LLM-enhanced ontology enrichment"
+            "Enhanced database connection management with pooling",
+            "Parallel schema analysis for improved performance", 
+            "Advanced error handling and validation",
+            "Structured logging and observability",
+            "Security-enhanced credential handling",
+            "RDF/OWL ontology generation with validation",
+            "LLM-enhanced ontology enrichment",
+            "Comprehensive configuration management"
         ],
         "tools": [
             "connect_database",
@@ -345,22 +757,36 @@ def get_server_info() -> Dict[str, Any]:
             "generate_ontology",
             "sample_table_data",
             "get_table_relationships",
+            "get_enrichment_data",
+            "apply_ontology_enrichment",
             "get_server_info"
-        ]
+        ],
+        "configuration": {
+            "log_level": config.log_level,
+            "base_uri": config.ontology_base_uri,
+            "max_sample_limit": MAX_SAMPLE_LIMIT,
+            "supported_formats": ["turtle", "rdf/xml", "json-ld"]
+        }
     }
-
 
 # --- Cleanup on shutdown ---
 
 def cleanup_server():
     """Clean up server resources."""
-    _server_state.cleanup()
-
+    try:
+        _server_state.cleanup()
+        logger.info("Server cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during server cleanup: {e}")
 
 if __name__ == "__main__":
     try:
+        logger.info("Starting Database Ontology MCP Server v0.2.0")
         mcp.run()
     except KeyboardInterrupt:
-        logger.info("Server shutdown requested")
+        logger.info("Server shutdown requested by user")
+    except Exception as e:
+        logger.error(f"Server startup error: {type(e).__name__}: {e}")
+        sys.exit(1)
     finally:
         cleanup_server()

@@ -1,13 +1,26 @@
 """Database connection and schema analysis manager."""
 
-import asyncio
-from typing import Dict, List, Optional, Tuple, Any
-from sqlalchemy import create_engine, text, MetaData, Table, Column, inspect
-from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
 import logging
-from dataclasses import dataclass
+import re
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Any
+
+from sqlalchemy import create_engine, text, MetaData, inspect
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.pool import QueuePool
+
+from .constants import (
+    CONNECTION_TIMEOUT, 
+    QUERY_TIMEOUT, 
+    IDENTIFIER_PATTERN,
+    POSTGRES_SYSTEM_SCHEMAS,
+    SNOWFLAKE_SYSTEM_SCHEMAS,
+    MIN_SAMPLE_LIMIT,
+    MAX_SAMPLE_LIMIT,
+    DEFAULT_SAMPLE_LIMIT
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +57,8 @@ class DatabaseManager:
         self.engine: Optional[Engine] = None
         self.metadata: Optional[MetaData] = None
         self.connection_info: Dict[str, Any] = {}
+        self._connection_pool_size = 5
+        self._max_overflow = 10
         
     @contextmanager
     def get_connection(self):
@@ -59,14 +74,27 @@ class DatabaseManager:
         
     def connect_postgresql(self, host: str, port: int, database: str, 
                           username: str, password: str) -> bool:
-        """Connect to PostgreSQL database."""
+        """Connect to PostgreSQL database with enhanced security and reliability."""
         try:
+            # Validate inputs
+            if not all([host, port, database, username]):
+                logger.error("Missing required PostgreSQL connection parameters")
+                return False
+            
             connection_string = f"postgresql://{username}:{password}@{host}:{port}/{database}"
             self.engine = create_engine(
                 connection_string,
-                pool_timeout=30,
+                poolclass=QueuePool,
+                pool_size=self._connection_pool_size,
+                max_overflow=self._max_overflow,
+                pool_timeout=CONNECTION_TIMEOUT,
                 pool_pre_ping=True,
-                echo=False
+                pool_recycle=3600,  # Recycle connections every hour
+                echo=False,
+                connect_args={
+                    "connect_timeout": CONNECTION_TIMEOUT,
+                    "application_name": "database-ontology-mcp"
+                }
             )
             self.metadata = MetaData()
             self.connection_info = {
@@ -77,30 +105,49 @@ class DatabaseManager:
                 "username": username
             }
             
-            # Test connection
+            # Test connection with timeout
             with self.get_connection() as conn:
-                conn.execute(text("SELECT 1"))
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
             
-            logger.info(f"Connected to PostgreSQL database: {database}")
+            logger.info(f"Connected to PostgreSQL database: {database} at {host}:{port}")
             return True
             
-        except SQLAlchemyError as e:
-            logger.error(f"Failed to connect to PostgreSQL: {e}")
+        except (SQLAlchemyError, OperationalError, DatabaseError) as e:
+            logger.error(f"Failed to connect to PostgreSQL {host}:{port}/{database}: {type(e).__name__}: {e}")
+            self.engine = None
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to PostgreSQL: {type(e).__name__}: {e}")
+            self.engine = None
             return False
     
     def connect_snowflake(self, account: str, username: str, password: str,
                          warehouse: str, database: str, schema: str = "PUBLIC") -> bool:
-        """Connect to Snowflake database."""
+        """Connect to Snowflake database with enhanced security and reliability."""
         try:
+            # Validate inputs
+            if not all([account, username, warehouse, database]):
+                logger.error("Missing required Snowflake connection parameters")
+                return False
+            
             connection_string = (
                 f"snowflake://{username}:{password}@{account}/"
                 f"{database}/{schema}?warehouse={warehouse}"
             )
             self.engine = create_engine(
                 connection_string,
-                pool_timeout=30,
+                poolclass=QueuePool,
+                pool_size=self._connection_pool_size,
+                max_overflow=self._max_overflow,
+                pool_timeout=CONNECTION_TIMEOUT,
                 pool_pre_ping=True,
-                echo=False
+                pool_recycle=3600,
+                echo=False,
+                connect_args={
+                    "application": "database-ontology-mcp",
+                    "network_timeout": CONNECTION_TIMEOUT
+                }
             )
             self.metadata = MetaData()
             self.connection_info = {
@@ -112,15 +159,21 @@ class DatabaseManager:
                 "schema": schema
             }
             
-            # Test connection
+            # Test connection with timeout
             with self.get_connection() as conn:
-                conn.execute(text("SELECT 1"))
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
             
-            logger.info(f"Connected to Snowflake database: {database}")
+            logger.info(f"Connected to Snowflake database: {database} (warehouse: {warehouse})")
             return True
             
-        except SQLAlchemyError as e:
-            logger.error(f"Failed to connect to Snowflake: {e}")
+        except (SQLAlchemyError, OperationalError, DatabaseError) as e:
+            logger.error(f"Failed to connect to Snowflake {account}/{database}: {type(e).__name__}: {e}")
+            self.engine = None
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to Snowflake: {type(e).__name__}: {e}")
+            self.engine = None
             return False
     
     def get_schemas(self) -> List[str]:
@@ -132,17 +185,19 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 # Use proper parameterized query for schema filtering
                 if self.connection_info.get("type") == "snowflake":
-                    query = text("""
+                    excluded_schemas = "', '".join(SNOWFLAKE_SYSTEM_SCHEMAS)
+                    query = text(f"""
                         SELECT schema_name 
                         FROM information_schema.schemata 
-                        WHERE schema_name NOT IN ('INFORMATION_SCHEMA', 'SNOWFLAKE', 'SNOWFLAKE_SAMPLE_DATA')
+                        WHERE schema_name NOT IN ('{excluded_schemas}')
                         ORDER BY schema_name
                     """)
                 else:
-                    query = text("""
+                    excluded_schemas = "', '".join(POSTGRES_SYSTEM_SCHEMAS)
+                    query = text(f"""
                         SELECT schema_name 
                         FROM information_schema.schemata 
-                        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                        WHERE schema_name NOT IN ('{excluded_schemas}')
                         ORDER BY schema_name
                     """)
                 result = conn.execute(query)
@@ -288,11 +343,12 @@ class DatabaseManager:
             return None
     
     def _validate_identifier(self, identifier: str) -> bool:
-        """Validate database identifier to prevent injection."""
-        if not identifier:
+        """Validate database identifier to prevent injection attacks."""
+        if not identifier or len(identifier) > 63:  # PostgreSQL limit
             return False
-        # Allow alphanumeric, underscore, and hyphens only
-        return identifier.replace('_', '').replace('-', '').isalnum()
+        
+        # Use regex pattern for strict validation
+        return bool(re.match(IDENTIFIER_PATTERN, identifier))
     
     def get_table_relationships(self, schema_name: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
         """Get relationships between tables in a schema."""
@@ -310,31 +366,37 @@ class DatabaseManager:
         return relationships
     
     def sample_table_data(self, table_name: str, schema_name: Optional[str] = None, 
-                         limit: int = 10) -> List[Dict[str, Any]]:
-        """Sample data from a table for analysis."""
+                         limit: int = DEFAULT_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
+        """Sample data from a table for analysis with enhanced validation."""
         if not self.engine:
             raise RuntimeError("No database connection established")
         
         # Validate inputs
         if not self._validate_identifier(table_name):
-            logger.error(f"Invalid table name: {table_name}")
-            return []
+            logger.error(f"Invalid table name format: {table_name}")
+            raise ValueError(f"Invalid table name format: {table_name}")
         
         if schema_name and not self._validate_identifier(schema_name):
-            logger.error(f"Invalid schema name: {schema_name}")
-            return []
+            logger.error(f"Invalid schema name format: {schema_name}")
+            raise ValueError(f"Invalid schema name format: {schema_name}")
         
-        if not isinstance(limit, int) or limit <= 0 or limit > 1000:
-            limit = 10
+        # Validate and normalize limit
+        if not isinstance(limit, int) or limit < MIN_SAMPLE_LIMIT:
+            limit = DEFAULT_SAMPLE_LIMIT
+        elif limit > MAX_SAMPLE_LIMIT:
+            limit = MAX_SAMPLE_LIMIT
+            logger.warning(f"Sample limit capped at {MAX_SAMPLE_LIMIT}")
         
         try:
             with self.get_connection() as conn:
+                # Use SQLAlchemy's text with bound parameters for safety
                 if schema_name:
-                    # Construct safe query with validated identifiers
-                    query = text(f'SELECT * FROM "{schema_name}"."{table_name}" LIMIT :limit')
+                    # Double-quote identifiers to handle case sensitivity
+                    full_table_name = f'"{schema_name}"."{table_name}"'
                 else:
-                    query = text(f'SELECT * FROM "{table_name}" LIMIT :limit')
+                    full_table_name = f'"{table_name}"'
                 
+                query = text(f'SELECT * FROM {full_table_name} LIMIT :limit')
                 result = conn.execute(query, {"limit": limit})
                 columns = list(result.keys())
                 
@@ -343,19 +405,28 @@ class DatabaseManager:
                     row_dict = {}
                     for i, value in enumerate(row):
                         # Convert non-serializable types to strings
+                        column_name = columns[i]
                         if value is not None:
                             if hasattr(value, 'isoformat'):  # datetime objects
-                                row_dict[columns[i]] = value.isoformat()
+                                row_dict[column_name] = value.isoformat()
+                            elif isinstance(value, (bytes, bytearray)):
+                                # Convert binary data to hex string
+                                row_dict[column_name] = value.hex()
+                            elif hasattr(value, '__dict__'):  # Complex objects
+                                row_dict[column_name] = str(value)
                             else:
-                                row_dict[columns[i]] = value
+                                row_dict[column_name] = value
                         else:
-                            row_dict[columns[i]] = None
+                            row_dict[column_name] = None
                     rows.append(row_dict)
                 
                 return rows
                 
-        except SQLAlchemyError as e:
-            logger.error(f"Failed to sample data from {table_name}: {e}")
+        except (SQLAlchemyError, ValueError) as e:
+            logger.error(f"Failed to sample data from {table_name}: {type(e).__name__}: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error sampling {table_name}: {type(e).__name__}: {e}")
             return []
     
     def disconnect(self):

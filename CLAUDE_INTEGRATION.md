@@ -47,8 +47,7 @@ SNOWFLAKE_WAREHOUSE=COMPUTE_WH
 SNOWFLAKE_DATABASE=MYDB
 SNOWFLAKE_SCHEMA=PUBLIC
 
-# OpenAI API Key for ontology enrichment (optional)
-OPENAI_API_KEY=your-openai-api-key-here
+# Additional configuration as needed
 
 # Logging Configuration
 LOG_LEVEL=INFO
@@ -61,7 +60,7 @@ Copy the environment template and configure your settings:
 cp config/.env.template .env
 ```
 
-Edit the `.env` file with your database credentials and OpenAI API key:
+Edit the `.env` file with your database credentials:
 
 ```env
 # Database connection settings
@@ -79,8 +78,7 @@ SNOWFLAKE_WAREHOUSE=COMPUTE_WH
 SNOWFLAKE_DATABASE=MYDB
 SNOWFLAKE_SCHEMA=PUBLIC
 
-# OpenAI API Key for ontology enrichment (optional)
-OPENAI_API_KEY="your-openai-api-key"
+# Additional configuration as needed
 
 # Logging level (DEBUG, INFO, WARNING, ERROR)
 LOG_LEVEL=INFO
@@ -146,7 +144,7 @@ The MCP server provides these tools:
 - **Enhanced Error Handling**: Standardized error responses with detailed error types
 - **Input Validation**: Comprehensive parameter validation for all tools
 - **Connection Management**: Improved database connection handling with proper cleanup
-- **LLM Integration**: Optional ontology enrichment using OpenAI's GPT models
+- **LLM Integration**: Optional ontology enrichment using LLM capabilities via MCP
 - **Logging**: Configurable logging levels via environment variables
 - **Security**: SQL injection protection and input sanitization
 

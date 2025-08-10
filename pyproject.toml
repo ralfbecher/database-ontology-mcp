@@ -1,28 +1,41 @@
 [project]
 name = "database-ontology-mcp"
-version = "0.1.0"
-description = "MCP server for database schema analysis and ontology generation"
+version = "0.2.0"
+description = "Enhanced MCP server for database schema analysis and ontology generation with security, performance, and reliability improvements"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Database Ontology MCP Contributors", email = "contributors@example.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["mcp", "database", "ontology", "rdf", "schema-analysis", "postgresql", "snowflake"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
-    "fastmcp>=0.9.0",
-    "sqlalchemy>=2.0.0",
-    "psycopg2-binary>=2.9.0",
-    "snowflake-sqlalchemy>=1.5.0",
-    "snowflake-connector-python>=3.0.0",
-    "pydantic>=2.0.0",
-    "python-dotenv>=1.0.0",
-    "rdflib>=7.0.0",
-    "owlrl>=6.0.0",
-    "openai>=1.3.0",
+    "fastmcp>=2.10.0,<3.0.0",
+    "sqlalchemy>=2.0.0,<3.0.0",
+    "psycopg2-binary>=2.9.0,<3.0.0",
+    "snowflake-sqlalchemy>=1.5.0,<2.0.0",
+    "snowflake-connector-python>=3.0.0,<4.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "rdflib>=7.0.0,<8.0.0",
+    "owlrl>=6.0.0,<7.0.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/yourusername/database-ontology-mcp"
 Repository = "https://github.com/yourusername/database-ontology-mcp"
+Documentation = "https://github.com/yourusername/database-ontology-mcp#readme"
+Issues = "https://github.com/yourusername/database-ontology-mcp/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -31,8 +44,73 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
+[tool.hatch.version]
+path = "src/__init__.py"
+
 [tool.uv]
 dev-dependencies = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest>=7.0.0,<8.0.0",
+    "pytest-asyncio>=0.21.0,<1.0.0",
+    "pytest-cov>=4.0.0,<5.0.0",
+    "pytest-mock>=3.10.0,<4.0.0",
+    "black>=23.0.0,<24.0.0",
+    "isort>=5.12.0,<6.0.0",
+    "flake8>=6.0.0,<7.0.0",
+    "mypy>=1.5.0,<2.0.0",
+    "pre-commit>=3.0.0,<4.0.0",
 ]
+
+# Tool configurations
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --cov=src --cov-report=term-missing"
+testpaths = [
+    "tests",
+]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"

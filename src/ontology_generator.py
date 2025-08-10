@@ -1,26 +1,26 @@
 """Ontology generator for creating RDF graphs from database schemas."""
 
+import json
+import logging
+import os
+import re
+from typing import List, Dict, Any, Optional
+
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, OWL, XSD
-from typing import List, Dict, Any, Optional
-import logging
-import json
-import os
-from openai import OpenAI
+
+from .constants import DEFAULT_BASE_URI, ONTOLOGY_TITLE, ONTOLOGY_DESCRIPTION
 from .database_manager import TableInfo, ColumnInfo
 
 logger = logging.getLogger(__name__)
 
-# Define namespaces
-EX = Namespace("http://example.com/ontology/")
-
 class OntologyGenerator:
     """Generates an ontology from a database schema."""
 
-    def __init__(self, base_uri: str = "http://example.com/ontology/"):
+    def __init__(self, base_uri: str = DEFAULT_BASE_URI):
         self.graph = Graph()
         self.base_uri = Namespace(base_uri)
-        self.graph.bind("ex", self.base_uri)
+        self.graph.bind("ns", self.base_uri)
         self.graph.bind("rdf", RDF)
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("owl", OWL)
@@ -31,8 +31,8 @@ class OntologyGenerator:
         # Add ontology metadata
         ontology_uri = self.base_uri[""]
         self.graph.add((ontology_uri, RDF.type, OWL.Ontology))
-        self.graph.add((ontology_uri, RDFS.label, Literal("Database Schema Ontology")))
-        self.graph.add((ontology_uri, RDFS.comment, Literal("Ontology generated from database schema")))
+        self.graph.add((ontology_uri, RDFS.label, Literal(ONTOLOGY_TITLE)))
+        self.graph.add((ontology_uri, RDFS.comment, Literal(ONTOLOGY_DESCRIPTION)))
         
         for table_info in tables_info:
             self._add_table_to_ontology(table_info)
@@ -124,12 +124,16 @@ class OntologyGenerator:
 
     def _clean_name(self, name: str) -> str:
         """Clean a name to make it suitable for URIs."""
+        if not name:
+            return 'unnamed'
+        
         # Replace spaces and special characters with underscores
-        import re
         cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        
         # Ensure it starts with a letter or underscore
         if cleaned and not (cleaned[0].isalpha() or cleaned[0] == '_'):
             cleaned = '_' + cleaned
+        
         return cleaned or 'unnamed'
 
     def _map_sql_to_xsd(self, sql_type: str) -> Optional[URIRef]:
@@ -185,120 +189,87 @@ class OntologyGenerator:
         return XSD.string
 
     def enrich_with_llm(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> str:
-        """Enriches the ontology with LLM insights."""
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY environment variable not found. Skipping LLM enrichment.")
-            return self.graph.serialize(format="turtle")
-
-        try:
-            client = OpenAI(api_key=api_key)
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI client: {e}")
-            return self.graph.serialize(format="turtle")
-
-        prompt = self._create_llm_prompt(schema_info, data_samples)
-
-        try:
-            logger.info("Sending request to LLM for ontology enrichment...")
-            completion = client.chat.completions.create(
-                model="gpt-4o",  # Updated to use more recent model
-                messages=[
-                    {"role": "system", "content": "You are an expert in ontology engineering and database schema analysis who provides suggestions in JSON format."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.3,
-                max_tokens=2000
-            )
-
-            response_content = completion.choices[0].message.content
-            if response_content:
-                enrichment_data = json.loads(response_content)
-                logger.info("Received enrichment suggestions from LLM.")
-                self._apply_llm_enrichment(enrichment_data)
-            else:
-                logger.warning("Empty response from LLM")
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {e}")
-        except Exception as e:
-            logger.error(f"Error during LLM enrichment: {e}")
-
+        """Enriches the ontology with LLM insights via MCP tools."""
+        logger.info("LLM enrichment will be handled by MCP prompts and tools.")
+        logger.info("Use the 'get_enrichment_data' and 'apply_enrichment' MCP tools for enrichment.")
+        
+        # For now, return the basic ontology
+        # The enrichment will be handled through MCP tools
         return self.graph.serialize(format="turtle")
 
-    def _create_llm_prompt(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> str:
-        """Creates a prompt for the LLM to enrich the ontology."""
+    def get_enrichment_data(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Prepares structured data for LLM enrichment analysis."""
         schema_summary = []
         for table in schema_info:
             columns = []
             for col in table.columns:
-                col_desc = f"{col.name} ({col.data_type})"
-                if col.is_primary_key:
-                    col_desc += " [PK]"
+                col_info = {
+                    "name": col.name,
+                    "data_type": col.data_type,
+                    "is_primary_key": col.is_primary_key,
+                    "is_foreign_key": col.is_foreign_key,
+                    "is_nullable": col.is_nullable,
+                    "comment": col.comment
+                }
                 if col.is_foreign_key:
-                    col_desc += f" [FK -> {col.foreign_key_table}.{col.foreign_key_column}]"
-                if not col.is_nullable:
-                    col_desc += " [NOT NULL]"
-                columns.append(col_desc)
+                    col_info["foreign_key_table"] = col.foreign_key_table
+                    col_info["foreign_key_column"] = col.foreign_key_column
+                columns.append(col_info)
             
             table_dict = {
                 "table_name": table.name,
+                "schema": table.schema,
                 "columns": columns,
-                "relationships": table.foreign_keys,
-                "row_count": table.row_count
+                "foreign_keys": table.foreign_keys,
+                "row_count": table.row_count,
+                "comment": table.comment
             }
             if data_samples.get(table.name):
                 # Limit sample data to avoid token limit issues
                 table_dict["sample_data"] = data_samples[table.name][:3]
             schema_summary.append(table_dict)
 
-        prompt = f'''
-You are an expert in ontology engineering and database schema analysis.
-Your task is to enrich a basic RDF ontology generated from a relational database schema.
-Analyze the following database schema and data samples to suggest more meaningful names for classes, properties, and relationships, and to add descriptive comments.
+        return {
+            "schema_data": schema_summary,
+            "instructions": {
+                "task": "Enrich a basic RDF ontology generated from a relational database schema",
+                "expected_format": {
+                    "classes": [
+                        {
+                            "original_name": "<original_table_name>",
+                            "suggested_name": "<SuggestedClassNameInPascalCase>",
+                            "description": "<A detailed description of the class's purpose>"
+                        }
+                    ],
+                    "properties": [
+                        {
+                            "table_name": "<table_name>",
+                            "original_name": "<original_column_name>",
+                            "suggested_name": "<suggestedPropertyNameInCamelCase>",
+                            "description": "<A detailed description of the property>"
+                        }
+                    ],
+                    "relationships": [
+                        {
+                            "from_table": "<table_with_fk>",
+                            "to_table": "<referenced_table>",
+                            "suggested_name": "<suggestedRelationshipNameInCamelCase>",
+                            "description": "<A detailed description of what the relationship represents>"
+                        }
+                    ]
+                },
+                "guidelines": [
+                    "Class names should be in PascalCase",
+                    "Property and relationship names should be in camelCase",
+                    "Descriptions should be clear, concise, and explain the semantic meaning",
+                    "If you have no suggestion for a name, use the original name but still provide a description",
+                    "Only include elements for which you can provide a meaningful description or a better name",
+                    "Focus on the most important tables and relationships first"
+                ]
+            }
+        }
 
-Database Schema and Data Samples:
-{json.dumps(schema_summary, indent=2, default=str)}
-
-Based on this information, please provide a JSON object with your suggestions. The JSON object must have the following structure, containing three keys: "classes", "properties", and "relationships".
-{{
-  "classes": [
-    {{
-      "original_name": "<original_table_name>",
-      "suggested_name": "<SuggestedClassNameInPascalCase>",
-      "description": "<A detailed description of the class's purpose>"
-    }}
-  ],
-  "properties": [
-    {{
-      "table_name": "<table_name>",
-      "original_name": "<original_column_name>",
-      "suggested_name": "<suggestedPropertyNameInCamelCase>",
-      "description": "<A detailed description of the property>"
-    }}
-  ],
-  "relationships": [
-    {{
-      "from_table": "<table_with_fk>",
-      "to_table": "<referenced_table>",
-      "suggested_name": "<suggestedRelationshipNameInCamelCase>",
-      "description": "<A detailed description of what the relationship represents>"
-    }}
-  ]
-}}
-
-Please adhere to the following guidelines:
-- Class names should be in PascalCase.
-- Property and relationship names should be in camelCase.
-- Descriptions should be clear, concise, and explain the semantic meaning.
-- If you have no suggestion for a name, use the original name but still provide a description.
-- Only include elements in the JSON for which you can provide a meaningful description or a better name.
-- Focus on the most important tables and relationships first.
-'''
-        return prompt
-
-    def _apply_llm_enrichment(self, enrichment_data: Dict[str, Any]):
+    def apply_enrichment(self, enrichment_data: Dict[str, Any]):
         """Applies the LLM's suggestions to the RDF graph."""
         logger.info("Applying LLM enrichment to the ontology graph...")
 
@@ -335,4 +306,8 @@ Please adhere to the following guidelines:
                     self.graph.add((rel_uri, RDFS.comment, Literal(rel_sugg['description'])))
         
         logger.info("Finished applying LLM enrichment.")
+
+    def serialize_ontology(self) -> str:
+        """Serialize the current ontology to Turtle format."""
+        return self.graph.serialize(format="turtle")
 
