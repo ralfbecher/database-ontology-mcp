@@ -48,6 +48,7 @@ class TableInfo:
     foreign_keys: List[Dict[str, str]]
     comment: Optional[str] = None
     row_count: Optional[int] = None
+    sample_data: Optional[List[Dict[str, Any]]] = None
 
 
 class DatabaseManager:
@@ -301,32 +302,61 @@ class DatabaseManager:
                     )
                     columns.append(column_info)
                 
-                # Get row count using safe parameterized query
+                # Get row count and sample data
                 row_count = None
+                sample_data = None
+                
                 try:
-                    if schema_name:
-                        # Use SQLAlchemy's quoted_name for safe identifier quoting
-                        count_query = text("SELECT COUNT(*) FROM :schema_table")
-                        # For proper schema.table handling, we need to construct this differently
-                        if self.connection_info.get("type") == "snowflake":
+                    # Validate identifiers once
+                    if not self._validate_identifier(table_name) or (schema_name and not self._validate_identifier(schema_name)):
+                        logger.warning(f"Invalid identifier format: {schema_name}.{table_name}")
+                    else:
+                        # Construct table name once
+                        if schema_name:
                             full_table_name = f'"{schema_name}"."{table_name}"'
                         else:
-                            full_table_name = f'"{schema_name}"."{table_name}"'
+                            full_table_name = f'"{table_name}"'
                         
-                        # Use a safer approach with string formatting but validate inputs first
-                        if self._validate_identifier(schema_name) and self._validate_identifier(table_name):
-                            count_query = text(f'SELECT COUNT(*) FROM "{schema_name}"."{table_name}"')
-                            result = conn.execute(count_query)
-                            row_count = result.scalar()
-                    else:
-                        if self._validate_identifier(table_name):
-                            count_query = text(f'SELECT COUNT(*) FROM "{table_name}"')
-                            result = conn.execute(count_query)
-                            row_count = result.scalar()
+                        # Get row count
+                        count_query = text(f'SELECT COUNT(*) FROM {full_table_name}')
+                        result = conn.execute(count_query)
+                        row_count = result.scalar()
+                        
+                        # Get 10 random sample rows
+                        if row_count and row_count > 0:
+                            if self.connection_info.get("type") == "snowflake":
+                                # Snowflake uses SAMPLE for random sampling
+                                sample_query = text(f'SELECT * FROM {full_table_name} SAMPLE (10 ROWS) LIMIT 10')
+                            else:
+                                # PostgreSQL uses ORDER BY RANDOM() for random sampling
+                                sample_query = text(f'SELECT * FROM {full_table_name} ORDER BY RANDOM() LIMIT 10')
+                            
+                            sample_result = conn.execute(sample_query)
+                            sample_columns = list(sample_result.keys())
+                            
+                            sample_rows = []
+                            for row in sample_result.fetchall():
+                                row_dict = {}
+                                for i, value in enumerate(row):
+                                    column_name = sample_columns[i]
+                                    if value is not None:
+                                        if hasattr(value, 'isoformat'):  # datetime objects
+                                            row_dict[column_name] = value.isoformat()
+                                        elif isinstance(value, (bytes, bytearray)):
+                                            row_dict[column_name] = value.hex()
+                                        elif hasattr(value, '__dict__'):  # Complex objects
+                                            row_dict[column_name] = str(value)
+                                        else:
+                                            row_dict[column_name] = value
+                                    else:
+                                        row_dict[column_name] = None
+                                sample_rows.append(row_dict)
+                            
+                            sample_data = sample_rows
+                        
                 except SQLAlchemyError as e:
-                    logger.warning(f"Could not get row count for {table_name}: {e}")
-                    # Row count might fail for various reasons, continue without it
-                    pass
+                    logger.warning(f"Could not get row count or sample data for {table_name}: {e}")
+                    # Continue without row count and sample data
                 
                 return TableInfo(
                     name=table_name,
@@ -335,7 +365,8 @@ class DatabaseManager:
                     primary_keys=primary_keys,
                     foreign_keys=foreign_keys,
                     comment=None,  # Would need separate query for table comments
-                    row_count=row_count
+                    row_count=row_count,
+                    sample_data=sample_data
                 )
                 
         except SQLAlchemyError as e:

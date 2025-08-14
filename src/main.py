@@ -410,7 +410,8 @@ def analyze_schema(schema_name: Optional[str] = None) -> Union[Dict[str, Any], s
                                 "primary_keys": table_info.primary_keys,
                                 "foreign_keys": table_info.foreign_keys,
                                 "comment": table_info.comment,
-                                "row_count": table_info.row_count
+                                "row_count": table_info.row_count,
+                                "sample_data": table_info.sample_data
                             }
                             all_table_info.append(table_dict)
                     except Exception as e:
