@@ -21,43 +21,11 @@ cd /Users/ralfbecher/database-ontology-mcp
 
 ### 2. Set Up Environment Variables
 
-Since the `.env.template` file is not included in the repository, create it manually:
+Copy the environment template file to create your local configuration:
 
 ```bash
-# Create the config directory if it doesn't exist
-mkdir -p config
-
-# Create the environment template file
-cat > config/.env.template << 'EOF'
-# Database Ontology MCP Server Environment Configuration Template
-# Copy this file to .env and fill in your actual values
-
-# PostgreSQL Configuration
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DATABASE=mydb
-POSTGRES_USERNAME=user
-POSTGRES_PASSWORD=password
-
-# Snowflake Configuration
-SNOWFLAKE_ACCOUNT=your-account
-SNOWFLAKE_USERNAME=user
-SNOWFLAKE_PASSWORD=password
-SNOWFLAKE_WAREHOUSE=COMPUTE_WH
-SNOWFLAKE_DATABASE=MYDB
-SNOWFLAKE_SCHEMA=PUBLIC
-
-# Additional configuration as needed
-
-# Logging Configuration
-LOG_LEVEL=INFO
-EOF
-```
-
-Copy the environment template and configure your settings:
-
-```bash
-cp config/.env.template .env
+# Copy the template to create your local .env file
+cp .env.template .env
 ```
 
 Edit the `.env` file with your database credentials:
