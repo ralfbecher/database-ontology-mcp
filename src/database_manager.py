@@ -4,12 +4,13 @@ import logging
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 
 from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError, ProgrammingError
 from sqlalchemy.pool import QueuePool
+from sqlalchemy.sql import sqltypes
 
 from .constants import (
     CONNECTION_TIMEOUT, 
@@ -459,6 +460,274 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Unexpected error sampling {table_name}: {type(e).__name__}: {e}")
             return []
+    
+    def validate_sql_syntax(self, sql_query: str) -> Dict[str, Any]:
+        """Validate SQL query syntax using database-level validation.
+        
+        Uses the database's own SQL parser via prepared statements to provide
+        accurate syntax validation and meaningful error messages for LLM correction.
+        
+        Args:
+            sql_query: SQL query to validate
+            
+        Returns:
+            Dictionary with validation results including database-specific errors
+        """
+        if not self.engine:
+            raise RuntimeError("No database connection established")
+        
+        validation_result = {
+            "is_valid": False,
+            "error": None,
+            "error_type": None,
+            "database_error": None,
+            "query_type": None,
+            "affected_tables": [],
+            "warnings": [],
+            "suggestions": []
+        }
+        
+        try:
+            # Step 1: Basic security checks
+            query_stripped = sql_query.strip()
+            if not query_stripped:
+                validation_result["error"] = "Empty query"
+                validation_result["error_type"] = "empty_query"
+                return validation_result
+            
+            query_upper = query_stripped.upper()
+            
+            # Check for multiple statements (security risk)
+            if ';' in query_stripped[:-1]:  # Allow trailing semicolon
+                validation_result["error"] = "Multiple SQL statements not allowed for security"
+                validation_result["error_type"] = "security_error"
+                validation_result["suggestions"].append("Split multiple statements into separate requests")
+                return validation_result
+            
+            # Determine and validate query type
+            if query_upper.startswith('SELECT'):
+                validation_result["query_type"] = "SELECT"
+            elif query_upper.startswith('WITH'):
+                validation_result["query_type"] = "CTE_SELECT"
+                if 'SELECT' not in query_upper:
+                    validation_result["warnings"].append("CTE should end with SELECT statement")
+            elif query_upper.startswith(('EXPLAIN', 'DESCRIBE', 'DESC', 'SHOW')):
+                validation_result["query_type"] = "METADATA"
+            else:
+                # Check for potentially dangerous operations
+                dangerous_ops = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE', 'INSERT', 'UPDATE', 'MERGE']
+                detected_ops = [op for op in dangerous_ops if query_upper.startswith(op)]
+                if detected_ops:
+                    validation_result["error"] = f"Destructive operations not allowed: {', '.join(detected_ops)}"
+                    validation_result["error_type"] = "forbidden_operation"
+                    validation_result["suggestions"].append("Use SELECT queries for data retrieval only")
+                    return validation_result
+                else:
+                    validation_result["error"] = "Only SELECT, CTE, and metadata queries are allowed"
+                    validation_result["error_type"] = "query_type_error"
+                    validation_result["suggestions"].append("Start your query with SELECT, WITH, EXPLAIN, or SHOW")
+                    return validation_result
+            
+            # Step 2: Database-level syntax validation
+            with self.get_connection() as conn:
+                try:
+                    if self.connection_info.get("type") == "postgresql":
+                        # PostgreSQL: Use PREPARE to validate syntax without execution
+                        prepare_name = "syntax_check_stmt"
+                        prepare_sql = f"PREPARE {prepare_name} AS {query_stripped}"
+                        deallocate_sql = f"DEALLOCATE {prepare_name}"
+                        
+                        try:
+                            # Prepare the statement (validates syntax)
+                            conn.execute(text(prepare_sql))
+                            # Clean up the prepared statement
+                            conn.execute(text(deallocate_sql))
+                            validation_result["is_valid"] = True
+                        except Exception as prepare_error:
+                            # Extract meaningful error from PostgreSQL
+                            error_msg = str(prepare_error)
+                            validation_result["database_error"] = error_msg
+                            validation_result["error"] = f"PostgreSQL syntax error: {error_msg}"
+                            validation_result["error_type"] = "syntax_error"
+                            
+                            # Add suggestions based on common errors
+                            if "relation" in error_msg.lower() and "does not exist" in error_msg.lower():
+                                validation_result["suggestions"].append("Check table/column names - they may not exist or may need proper schema qualification")
+                            elif "syntax error" in error_msg.lower():
+                                validation_result["suggestions"].append("Review SQL syntax - check for missing commas, parentheses, or keywords")
+                            elif "permission denied" in error_msg.lower():
+                                validation_result["suggestions"].append("Insufficient permissions to access the specified tables")
+                            
+                    elif self.connection_info.get("type") == "snowflake":
+                        # Snowflake: Use EXPLAIN to validate syntax
+                        explain_sql = f"EXPLAIN {query_stripped}"
+                        try:
+                            result = conn.execute(text(explain_sql))
+                            result.fetchall()  # Consume the explain plan
+                            validation_result["is_valid"] = True
+                        except Exception as explain_error:
+                            # Extract meaningful error from Snowflake
+                            error_msg = str(explain_error)
+                            validation_result["database_error"] = error_msg
+                            validation_result["error"] = f"Snowflake syntax error: {error_msg}"
+                            validation_result["error_type"] = "syntax_error"
+                            
+                            # Add suggestions based on common Snowflake errors
+                            if "does not exist" in error_msg.lower():
+                                validation_result["suggestions"].append("Object not found - check table/schema names and ensure proper qualification (DATABASE.SCHEMA.TABLE)")
+                            elif "sql compilation error" in error_msg.lower():
+                                validation_result["suggestions"].append("SQL compilation failed - review syntax and object references")
+                            elif "invalid identifier" in error_msg.lower():
+                                validation_result["suggestions"].append("Invalid identifier - check column names and use double quotes for case-sensitive names")
+                    
+                    # Step 3: Extract table references if validation succeeded
+                    if validation_result["is_valid"]:
+                        # Extract table names using regex (basic approach)
+                        table_patterns = [
+                            r'\bFROM\s+(?:[\w"\'`\[\]]+\.)*(["\w`\[\]]+)',  # FROM table
+                            r'\bJOIN\s+(?:[\w"\'`\[\]]+\.)*(["\w`\[\]]+)',  # JOIN table
+                            r'\bUPDATE\s+(?:[\w"\'`\[\]]+\.)*(["\w`\[\]]+)',  # UPDATE table
+                            r'\bINTO\s+(?:[\w"\'`\[\]]+\.)*(["\w`\[\]]+)',  # INSERT INTO table
+                        ]
+                        
+                        tables = set()
+                        for pattern in table_patterns:
+                            matches = re.findall(pattern, query_stripped, re.IGNORECASE)
+                            tables.update(match.strip('"\'`[]') for match in matches)
+                        
+                        validation_result["affected_tables"] = list(tables)
+                        
+                        # Add informational warnings
+                        if len(tables) > 5:
+                            validation_result["warnings"].append(f"Query involves {len(tables)} tables - consider query complexity")
+                        
+                except Exception as conn_error:
+                    validation_result["error"] = f"Database connection error during validation: {str(conn_error)}"
+                    validation_result["error_type"] = "connection_error"
+                    
+        except Exception as e:
+            validation_result["error"] = f"Validation system error: {str(e)}"
+            validation_result["error_type"] = "internal_error"
+            logger.error(f"SQL validation error: {e}")
+            
+        return validation_result
+    
+    def execute_sql_query(self, sql_query: str, limit: int = 1000) -> Dict[str, Any]:
+        """Execute a validated SQL query and return results safely.
+        
+        Args:
+            sql_query: SQL query to execute (must pass validation first)
+            limit: Maximum number of rows to return (safety limit)
+            
+        Returns:
+            Dictionary with query results and execution metadata
+        """
+        if not self.engine:
+            raise RuntimeError("No database connection established")
+        
+        # Validate and cap the limit
+        if limit <= 0 or limit > 5000:
+            limit = min(max(limit, 100), 5000)
+            
+        result_data = {
+            "success": False,
+            "data": [],
+            "columns": [],
+            "row_count": 0,
+            "execution_time_ms": None,
+            "error": None,
+            "error_type": None,
+            "warnings": [],
+            "query_plan": None,
+            "limit_applied": False
+        }
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            # Step 1: Mandatory validation
+            validation = self.validate_sql_syntax(sql_query)
+            if not validation["is_valid"]:
+                result_data["error"] = validation["error"]
+                result_data["error_type"] = validation["error_type"]
+                result_data["database_error"] = validation.get("database_error")
+                return result_data
+            
+            # Transfer warnings from validation
+            result_data["warnings"].extend(validation.get("warnings", []))
+            
+            # Step 2: Apply safety limits
+            query_to_execute = sql_query.strip().rstrip(';')
+            query_upper = query_to_execute.upper()
+            
+            # Add LIMIT if not present and it's a data-returning query
+            needs_limit = (validation["query_type"] in ["SELECT", "CTE_SELECT"] and 
+                         "LIMIT" not in query_upper and 
+                         "TOP " not in query_upper)  # Snowflake also supports TOP
+            
+            if needs_limit:
+                query_to_execute = f"{query_to_execute} LIMIT {limit}"
+                result_data["limit_applied"] = True
+                result_data["warnings"].append(f"Safety LIMIT {limit} applied to prevent large result sets")
+            
+            # Step 3: Execute the query
+            with self.get_connection() as conn:
+                result = conn.execute(text(query_to_execute))
+                
+                if result.returns_rows:
+                    # Handle SELECT-type queries
+                    result_data["columns"] = list(result.keys())
+                    
+                    rows = []
+                    row_count = 0
+                    for row in result.fetchall():
+                        row_count += 1
+                        row_dict = {}
+                        for i, value in enumerate(row):
+                            column_name = result_data["columns"][i]
+                            # Serialize complex data types
+                            if value is not None:
+                                if hasattr(value, 'isoformat'):  # datetime/date objects
+                                    row_dict[column_name] = value.isoformat()
+                                elif isinstance(value, (bytes, bytearray)):  # binary data
+                                    row_dict[column_name] = f"<binary:{len(value)} bytes>"
+                                elif isinstance(value, (dict, list)):  # JSON/array types
+                                    row_dict[column_name] = value
+                                elif hasattr(value, '__dict__'):  # Complex objects
+                                    row_dict[column_name] = str(value)
+                                else:
+                                    row_dict[column_name] = value
+                            else:
+                                row_dict[column_name] = None
+                        rows.append(row_dict)
+                    
+                    result_data["data"] = rows
+                    result_data["row_count"] = row_count
+                    
+                    if row_count == limit and result_data["limit_applied"]:
+                        result_data["warnings"].append(f"Result set may be truncated at {limit} rows")
+                        
+                else:
+                    # Handle non-returning queries (EXPLAIN, etc.)
+                    result_data["row_count"] = getattr(result, 'rowcount', 0)
+                
+                end_time = time.time()
+                result_data["execution_time_ms"] = round((end_time - start_time) * 1000, 2)
+                result_data["success"] = True
+                
+                logger.info(f"SQL query executed: {result_data['row_count']} rows in {result_data['execution_time_ms']}ms")
+                
+        except (SQLAlchemyError, ProgrammingError) as e:
+            result_data["error"] = str(e)
+            result_data["error_type"] = "execution_error"
+            logger.error(f"SQL execution failed: {e}")
+        except Exception as e:
+            result_data["error"] = f"Unexpected execution error: {str(e)}"
+            result_data["error_type"] = "internal_error"
+            logger.error(f"Unexpected SQL execution error: {e}")
+            
+        return result_data
     
     def disconnect(self):
         """Close the database connection."""

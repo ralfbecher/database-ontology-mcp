@@ -50,7 +50,7 @@ def print_startup_info():
         logger.info(f"  • {tool}")
     
     logger.info("")
-    logger.info("🗄️  Supported Databases: PostgreSQL, Snowflake")
+    logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake")
     logger.info("🧠 LLM Enrichment: Available via MCP prompts and tools")
     logger.info("🔒 Security: Enhanced credential handling and input validation")
     logger.info("⚡ Performance: Connection pooling and parallel processing")

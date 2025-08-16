@@ -730,6 +730,105 @@ def apply_ontology_enrichment(
             )
 
 @mcp.tool()
+def validate_sql_syntax(sql_query: str) -> Union[Dict[str, Any], str]:
+    """Validate SQL query syntax using database-level validation for LLM correction.
+    
+    This tool uses the database's own SQL parser (via prepared statements for PostgreSQL 
+    or EXPLAIN for Snowflake) to provide accurate syntax validation and meaningful error 
+    messages that LLMs can use to self-correct their generated SQL.
+    
+    Args:
+        sql_query: SQL query to validate (text-to-SQL generated query)
+    
+    Returns:
+        Dictionary with validation results including database-specific errors and suggestions
+    """
+    with error_handler("validate_sql_syntax") as handler:
+        if not sql_query or not sql_query.strip():
+            return create_error_response(
+                "SQL query is required",
+                "validation_error"
+            )
+        
+        db_manager = _server_state.get_db_manager()
+        try:
+            validation_result = db_manager.validate_sql_syntax(sql_query)
+            
+            # Log validation attempt for debugging
+            if validation_result["is_valid"]:
+                logger.info(f"SQL validation successful: {validation_result['query_type']}")
+            else:
+                logger.warning(f"SQL validation failed: {validation_result['error']}")
+            
+            return validation_result
+            
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established", 
+                "connection_error",
+                "Use connect_database tool first"
+            )
+        except Exception as e:
+            return create_error_response(
+                f"SQL validation error: {str(e)}",
+                "validation_error"
+            )
+
+@mcp.tool()
+def execute_sql_query(
+    sql_query: str, 
+    limit: int = 1000
+) -> Union[Dict[str, Any], str]:
+    """Execute a validated SQL query and return results safely.
+    
+    This tool executes SQL queries with built-in safety measures including automatic
+    validation, result limits, and execution timeouts. Only SELECT, CTE, and metadata
+    queries are allowed for security.
+    
+    Args:
+        sql_query: SQL query to execute (must be SELECT, WITH, EXPLAIN, etc.)
+        limit: Maximum number of rows to return (default: 1000, max: 5000)
+    
+    Returns:
+        Dictionary with query results, execution metadata, and any warnings
+    """
+    with error_handler("execute_sql_query") as handler:
+        if not sql_query or not sql_query.strip():
+            return create_error_response(
+                "SQL query is required",
+                "validation_error"
+            )
+        
+        # Validate limit parameter
+        if not isinstance(limit, int) or limit <= 0:
+            limit = 1000
+            logger.warning("Invalid limit parameter, using default: 1000")
+        
+        db_manager = _server_state.get_db_manager()
+        try:
+            result = db_manager.execute_sql_query(sql_query, limit)
+            
+            # Log execution results
+            if result["success"]:
+                logger.info(f"SQL executed: {result['row_count']} rows in {result['execution_time_ms']}ms")
+            else:
+                logger.warning(f"SQL execution failed: {result['error']}")
+            
+            return result
+            
+        except RuntimeError as e:
+            return create_error_response(
+                "No database connection established",
+                "connection_error", 
+                "Use connect_database tool first"
+            )
+        except Exception as e:
+            return create_error_response(
+                f"SQL execution error: {str(e)}",
+                "execution_error"
+            )
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
     
@@ -749,6 +848,8 @@ def get_server_info() -> Dict[str, Any]:
             "Security-enhanced credential handling",
             "RDF/OWL ontology generation with validation",
             "LLM-enhanced ontology enrichment",
+            "Database-level SQL syntax validation for text-to-SQL",
+            "Safe SQL query execution with automatic limits",
             "Comprehensive configuration management"
         ],
         "tools": [
@@ -760,6 +861,8 @@ def get_server_info() -> Dict[str, Any]:
             "get_table_relationships",
             "get_enrichment_data",
             "apply_ontology_enrichment",
+            "validate_sql_syntax",
+            "execute_sql_query",
             "get_server_info"
         ],
         "configuration": {
