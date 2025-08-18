@@ -78,6 +78,9 @@ class DatabaseManager:
     
     def _ensure_connection(self):
         """Ensure we have a healthy database connection, reconnecting if necessary."""
+        logger.debug(f"_ensure_connection: engine exists: {self.engine is not None}")
+        logger.debug(f"_ensure_connection: last_params available: {self._last_connection_params is not None}")
+        
         if not self.engine:
             if self._last_connection_params:
                 logger.info("No engine found, reconnecting to database using stored parameters")
@@ -91,6 +94,8 @@ class DatabaseManager:
             else:
                 logger.error("Connection unhealthy but no reconnection parameters available")
                 raise RuntimeError("Database connection is unhealthy and cannot be restored")
+                
+        logger.debug(f"_ensure_connection: final engine state: {self.engine is not None}")
     
     def _reconnect(self):
         """Reconnect to the database using stored parameters."""
@@ -310,8 +315,16 @@ class DatabaseManager:
     
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         """Get list of tables in a schema."""
-        if not self.engine:
-            raise RuntimeError("No database connection established")
+        logger.debug(f"get_tables: Starting, engine exists: {self.has_engine()}")
+        
+        # Ensure connection before proceeding
+        try:
+            self._ensure_connection()
+        except RuntimeError as e:
+            logger.error(f"get_tables: Connection check failed: {e}")
+            raise
+        
+        logger.debug(f"get_tables: After ensure_connection, engine exists: {self.has_engine()}")
         
         try:
             with self.get_connection() as conn:
@@ -340,8 +353,16 @@ class DatabaseManager:
     
     def analyze_table(self, table_name: str, schema_name: Optional[str] = None) -> Optional[TableInfo]:
         """Analyze a specific table and return detailed information."""
-        if not self.engine:
-            raise RuntimeError("No database connection established")
+        logger.debug(f"analyze_table: Starting analysis of {table_name}, engine exists: {self.has_engine()}")
+        
+        # Ensure connection before proceeding
+        try:
+            self._ensure_connection()
+        except RuntimeError as e:
+            logger.error(f"analyze_table: Connection check failed: {e}")
+            raise
+        
+        logger.debug(f"analyze_table: After ensure_connection, engine exists: {self.has_engine()}")
         
         try:
             with self.get_connection() as conn:
@@ -832,6 +853,40 @@ class DatabaseManager:
     def has_engine(self) -> bool:
         """Check if database engine exists (basic connection check)."""
         return self.engine is not None
+    
+    def restore_connection_if_needed(self) -> bool:
+        """Attempt to restore connection if engine is missing but params are available."""
+        if not self.has_engine() and self._last_connection_params:
+            logger.info("restore_connection_if_needed: Attempting to restore connection")
+            try:
+                self._reconnect()
+                return True
+            except Exception as e:
+                logger.error(f"restore_connection_if_needed: Failed to restore connection: {e}")
+                return False
+        return self.has_engine()
+    
+    def force_reconnect(self) -> bool:
+        """Force a reconnection even if engine exists (for troubleshooting)."""
+        if not self._last_connection_params:
+            logger.error("force_reconnect: No connection parameters available")
+            return False
+        
+        logger.info("force_reconnect: Forcing database reconnection")
+        try:
+            # Clear current connection
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+                logger.debug("force_reconnect: Disposed existing engine")
+            
+            # Reconnect
+            self._reconnect()
+            logger.info("force_reconnect: Reconnection successful")
+            return True
+        except Exception as e:
+            logger.error(f"force_reconnect: Failed to reconnect: {e}")
+            return False
     
     def is_connected(self) -> bool:
         """Check if database is currently connected and healthy."""

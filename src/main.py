@@ -28,54 +28,26 @@ logger = setup_logging(config.log_level)
 # --- MCP Server Setup ---
 mcp = FastMCP("Database Ontology MCP Server")
 
-# --- Dependency Management with Connection Pooling ---
+# --- Simple Global Connection Cache ---
 
-class ServerState:
-    """Manages server state and dependencies with improved resource management."""
-    
-    def __init__(self):
-        self._db_manager: Optional[DatabaseManager] = None
-        self._thread_pool: Optional[ThreadPoolExecutor] = None
-        self._max_workers = 4
-    
-    @property
-    def thread_pool(self) -> ThreadPoolExecutor:
-        """Get or create thread pool for async operations."""
-        if self._thread_pool is None:
-            self._thread_pool = ThreadPoolExecutor(max_workers=self._max_workers)
-        return self._thread_pool
-    
-    def get_db_manager(self) -> DatabaseManager:
-        """Get or create database manager instance."""
-        if self._db_manager is None:
-            self._db_manager = DatabaseManager()
-            logger.info(f"Created new DatabaseManager instance: {id(self._db_manager)}")
-        else:
-            logger.debug(f"Returning existing DatabaseManager instance: {id(self._db_manager)}")
-        return self._db_manager
-    
-    def get_ontology_generator(self, base_uri: Optional[str] = None) -> OntologyGenerator:
-        """Get ontology generator instance."""
-        uri = base_uri or config.ontology_base_uri
-        return OntologyGenerator(base_uri=uri)
-    
-    def cleanup(self):
-        """Clean up resources."""
-        try:
-            if self._db_manager:
-                self._db_manager.disconnect()
-                self._db_manager = None
-                logger.debug("DatabaseManager cleaned up")
-            
-            if self._thread_pool:
-                self._thread_pool.shutdown(wait=True)
-                self._thread_pool = None
-                logger.debug("ThreadPool cleaned up")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+# Global database manager - simple and direct
+_db_manager: Optional[DatabaseManager] = None
+_thread_pool: Optional[ThreadPoolExecutor] = None
 
-# Global server state
-_server_state = ServerState()
+def get_db_manager() -> DatabaseManager:
+    """Get or create global database manager."""
+    global _db_manager
+    if _db_manager is None:
+        _db_manager = DatabaseManager()
+        logger.info("Created global DatabaseManager")
+    return _db_manager
+
+def get_thread_pool() -> ThreadPoolExecutor:
+    """Get or create global thread pool."""
+    global _thread_pool
+    if _thread_pool is None:
+        _thread_pool = ThreadPoolExecutor(max_workers=4)
+    return _thread_pool
 
 # --- Enhanced Error Response Models ---
 
@@ -261,9 +233,7 @@ def connect_database(db_type: str) -> str:
                 "validation_error"
             )
         
-        db_manager = _server_state.get_db_manager()
-        logger.info(f"connect_database: Got DatabaseManager instance: {id(db_manager)}")
-        logger.info(f"connect_database: Current engine state: {db_manager.has_engine()}")
+        db_manager = get_db_manager()
         
         # Get database configuration from environment
         try:
@@ -315,12 +285,6 @@ def connect_database(db_type: str) -> str:
                 }
             
             if success:
-                # Verify connection was actually established
-                logger.info(f"connect_database: Connection successful, verifying state")
-                logger.info(f"connect_database: Engine exists after connection: {db_manager.has_engine()}")
-                logger.info(f"connect_database: Connection info: {db_manager.connection_info}")
-                logger.info(f"connect_database: Last connection params stored: {db_manager._last_connection_params is not None}")
-                
                 # Create safe logging info (without passwords)
                 safe_info = sanitize_for_logging({
                     "db_type": db_type,
@@ -356,7 +320,16 @@ def list_schemas() -> Union[List[str], str]:
         List of schema names or error response
     """
     with error_handler("list_schemas") as handler:
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
+        
+        # Ensure connection is available
+        if not db_manager.has_engine():
+            return create_error_response(
+                "No database connection established",
+                "connection_error", 
+                "Use connect_database tool first"
+            )
+        
         try:
             schemas = db_manager.get_schemas()
             logger.debug(f"Retrieved {len(schemas)} schemas")
@@ -379,7 +352,7 @@ def analyze_schema(schema_name: Optional[str] = None) -> Union[Dict[str, Any], s
         Dictionary containing tables and their detailed information or error response
     """
     with error_handler("analyze_schema") as handler:
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         try:
             tables = db_manager.get_tables(schema_name)
             logger.debug(f"Found {len(tables)} tables in schema '{schema_name or 'default'}'")
@@ -456,25 +429,15 @@ def generate_ontology(
         RDF ontology in Turtle format or error response
     """
     with error_handler("generate_ontology") as handler:
-        db_manager = _server_state.get_db_manager()
-        logger.info(f"generate_ontology: Got DatabaseManager instance: {id(db_manager)}")
-        logger.info(f"generate_ontology: ServerState instance: {id(_server_state)}")
+        db_manager = get_db_manager()
         
-        # Debug connection status
-        logger.info(f"generate_ontology: checking connection status")
-        logger.info(f"generate_ontology: Engine exists: {db_manager.has_engine()}")
-        logger.info(f"generate_ontology: Connection info: {db_manager.connection_info}")
-        logger.info(f"generate_ontology: Last connection params available: {db_manager._last_connection_params is not None}")
-        
+        # Simple connection check
         if not db_manager.has_engine():
-            logger.error("generate_ontology: No database engine found")
             return create_error_response(
                 "No database connection established",
                 "connection_error",
                 "Please use connect_database tool first to establish a connection"
             )
-        
-        logger.info(f"generate_ontology: Engine exists, proceeding with ontology generation")
         
         try:
             tables = db_manager.get_tables(schema_name)
@@ -487,7 +450,7 @@ def generate_ontology(
             
             # Parallel table analysis
             tables_info = []
-            with _server_state.thread_pool as executor:
+            with get_thread_pool() as executor:
                 future_to_table = {
                     executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
                     for table_name in tables
@@ -508,7 +471,8 @@ def generate_ontology(
                 )
             
             # Generate ontology
-            generator = _server_state.get_ontology_generator(base_uri)
+            uri = base_uri or config.ontology_base_uri
+            generator = OntologyGenerator(base_uri=uri)
             ontology_ttl = generator.generate_from_schema(tables_info)
             
             if enrich_llm:
@@ -564,7 +528,7 @@ def sample_table_data(
                 "validation_error"
             )
         
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         try:
             sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
             logger.debug(f"Sampled {len(sample_data)} rows from {table_name}")
@@ -583,7 +547,7 @@ def get_table_relationships(schema_name: Optional[str] = None) -> Union[Dict[str
         Dictionary mapping table names to their foreign key relationships or error response
     """
     with error_handler("get_table_relationships") as handler:
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         try:
             relationships = db_manager.get_table_relationships(schema_name)
             logger.debug(f"Retrieved relationships for {len(relationships)} tables")
@@ -606,7 +570,7 @@ def get_enrichment_data(schema_name: Optional[str] = None) -> Union[Dict[str, An
         Dictionary containing schema data and enrichment instructions or error response
     """
     with error_handler("get_enrichment_data") as handler:
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         
         try:
             tables = db_manager.get_tables(schema_name)
@@ -697,7 +661,7 @@ def apply_ontology_enrichment(
                 "validation_error"
             )
         
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         
         try:
             tables = db_manager.get_tables(schema_name)
@@ -774,7 +738,7 @@ def validate_sql_syntax(sql_query: str) -> Union[Dict[str, Any], str]:
                 "validation_error"
             )
         
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         try:
             validation_result = db_manager.validate_sql_syntax(sql_query)
             
@@ -828,7 +792,7 @@ def execute_sql_query(
             limit = 1000
             logger.warning("Invalid limit parameter, using default: 1000")
         
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_db_manager()
         try:
             result = db_manager.execute_sql_query(sql_query, limit)
             
@@ -852,75 +816,6 @@ def execute_sql_query(
                 "execution_error"
             )
 
-@mcp.tool()
-def debug_connection_state() -> Dict[str, Any]:
-    """Debug tool to examine DatabaseManager state across tool calls.
-    
-    Returns detailed information about the current DatabaseManager instance
-    and connection state for troubleshooting.
-    
-    Returns:
-        Dictionary with debugging information
-    """
-    db_manager = _server_state.get_db_manager()
-    
-    debug_info = {
-        "server_state_id": id(_server_state),
-        "db_manager_id": id(db_manager),
-        "has_engine": db_manager.has_engine(),
-        "connection_info": db_manager.connection_info.copy() if db_manager.connection_info else None,
-        "has_last_params": db_manager._last_connection_params is not None,
-        "is_connected": db_manager.is_connected() if db_manager.has_engine() else False
-    }
-    
-    if db_manager._last_connection_params:
-        # Sanitize the params (remove password)
-        sanitized_params = {k: v for k, v in db_manager._last_connection_params.items() if k != "password"}
-        sanitized_params["password"] = "[REDACTED]" if "password" in db_manager._last_connection_params else None
-        debug_info["last_connection_params"] = sanitized_params
-    
-    logger.info(f"debug_connection_state: {debug_info}")
-    return debug_info
-
-@mcp.tool()
-def check_connection_status() -> Union[Dict[str, Any], str]:
-    """Check the current database connection status and health.
-    
-    This tool provides detailed information about the database connection state,
-    including whether the connection is healthy, connection details, and 
-    reconnection capabilities.
-    
-    Returns:
-        Dictionary with connection status information
-    """
-    with error_handler("check_connection_status") as handler:
-        db_manager = _server_state.get_db_manager()
-        try:
-            status = db_manager.get_connection_status()
-            
-            # Add user-friendly status message
-            if status["connected"]:
-                db_info = status["connection_info"]
-                if db_info and db_info.get("type") == "postgresql":
-                    status["status_message"] = f"✅ Connected to PostgreSQL: {db_info['database']} at {db_info['host']}:{db_info['port']}"
-                elif db_info and db_info.get("type") == "snowflake":
-                    status["status_message"] = f"✅ Connected to Snowflake: {db_info['database']} (account: {db_info['account']})"
-                else:
-                    status["status_message"] = "✅ Database connection is healthy"
-            else:
-                if status["last_params_available"]:
-                    status["status_message"] = "⚠️ Connection lost but auto-reconnection is available"
-                else:
-                    status["status_message"] = "❌ No database connection established"
-            
-            logger.debug(f"Connection status checked: {status['connected']}")
-            return status
-            
-        except Exception as e:
-            return create_error_response(
-                f"Error checking connection status: {str(e)}",
-                "connection_check_error"
-            )
 
 @mcp.tool()
 def get_server_info() -> Dict[str, Any]:
@@ -949,8 +844,6 @@ def get_server_info() -> Dict[str, Any]:
         ],
         "tools": [
             "connect_database",
-            "debug_connection_state",
-            "check_connection_status",
             "list_schemas", 
             "analyze_schema",
             "generate_ontology",
@@ -975,7 +868,13 @@ def get_server_info() -> Dict[str, Any]:
 def cleanup_server():
     """Clean up server resources."""
     try:
-        _server_state.cleanup()
+        global _db_manager, _thread_pool
+        if _db_manager:
+            _db_manager.disconnect()
+            _db_manager = None
+        if _thread_pool:
+            _thread_pool.shutdown(wait=True)
+            _thread_pool = None
         logger.info("Server cleanup completed")
     except Exception as e:
         logger.error(f"Error during server cleanup: {e}")
