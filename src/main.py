@@ -86,10 +86,13 @@ def get_db_manager() -> DatabaseManager:
     return _db_manager
 
 def get_thread_pool() -> ThreadPoolExecutor:
-    """Get or create global thread pool."""
+    """Get or create global thread pool, handling shutdown state."""
     global _thread_pool
-    if _thread_pool is None:
+    if _thread_pool is None or _thread_pool._shutdown:
+        if _thread_pool is not None:
+            logger.debug("Thread pool was shut down, creating new one")
         _thread_pool = ThreadPoolExecutor(max_workers=4)
+        logger.debug("Created new ThreadPoolExecutor")
     return _thread_pool
 
 # --- Enhanced Error Response Models ---
@@ -408,21 +411,14 @@ def analyze_schema(schema_name: Optional[str] = None) -> Union[Dict[str, Any], s
             tables = db_manager.get_tables(schema_name)
             logger.debug(f"Found {len(tables)} tables in schema '{schema_name or 'default'}'")
             
-            # Parallel table analysis for better performance
+            # Sequential table analysis 
             all_table_info = []
-            with get_thread_pool() as executor:
-                future_to_table = {
-                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
-                    for table_name in tables
-                }
-                
-                for future in as_completed(future_to_table):
-                    table_name = future_to_table[future]
-                    try:
-                        table_info = future.result()
-                        if table_info:
-                            # Convert dataclass to dict for JSON serialization
-                            table_dict = {
+            for table_name in tables:
+                try:
+                    table_info = db_manager.analyze_table(table_name, schema_name)
+                    if table_info:
+                        # Convert dataclass to dict for JSON serialization
+                        table_dict = {
                                 "name": table_info.name,
                                 "schema": table_info.schema,
                                 "columns": [
@@ -504,21 +500,15 @@ def generate_ontology(
                 "Schema may not exist or may be empty"
             )
         
-        # Parallel table analysis
+        # Sequential table analysis (simplified to avoid thread pool issues)
         tables_info = []
-        with get_thread_pool() as executor:
-            future_to_table = {
-                executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
-                for table_name in tables
-            }
-            
-            for future in as_completed(future_to_table):
-                try:
-                    table_info = future.result()
-                    if table_info:
-                        tables_info.append(table_info)
-                except Exception as e:
-                    logger.warning(f"Failed to analyze table: {e}")
+        for table_name in tables:
+            try:
+                table_info = db_manager.analyze_table(table_name, schema_name)
+                if table_info:
+                    tables_info.append(table_info)
+            except Exception as e:
+                logger.warning(f"Failed to analyze table {table_name}: {e}")
         
         if not tables_info:
             return create_error_response(
@@ -737,7 +727,7 @@ def apply_ontology_enrichment(
             
             # Analyze tables
             tables_info = []
-            with get_thread_pool() as executor:
+            executor = get_thread_pool()
                 future_to_table = {
                     executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
                     for table_name in tables
