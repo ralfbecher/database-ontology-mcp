@@ -20,6 +20,7 @@ from .constants import (
 from .database_manager import DatabaseManager, TableInfo
 from .ontology_generator import OntologyGenerator
 from .utils import setup_logging, sanitize_for_logging, sanitize_sql_for_logging
+from .connection_cache import save_connection_params, load_connection_params
 
 # Initialize logging
 config = config_manager.get_server_config()
@@ -35,16 +36,40 @@ _db_manager: Optional[DatabaseManager] = None
 _thread_pool: Optional[ThreadPoolExecutor] = None
 
 def get_db_manager() -> DatabaseManager:
-    """Get or create global database manager with auto-reconnection."""
+    """Get or create global database manager with persistent auto-reconnection."""
     global _db_manager
     if _db_manager is None:
         _db_manager = DatabaseManager()
         logger.info("Created global DatabaseManager")
     
-    # Auto-reconnect if connection is lost but we have stored params
-    if not _db_manager.has_engine() and _db_manager._last_connection_params:
-        logger.info("Auto-reconnecting to database using stored parameters")
-        _db_manager.restore_connection_if_needed()
+    # Auto-reconnect using persistent cache if no connection
+    if not _db_manager.has_engine():
+        # Try database manager's stored params first
+        if _db_manager._last_connection_params:
+            logger.info("Auto-reconnecting using DatabaseManager stored parameters")
+            _db_manager.restore_connection_if_needed()
+        else:
+            # Fall back to persistent cache
+            cached_params = load_connection_params()
+            if cached_params:
+                logger.info("Auto-reconnecting using persistent cache parameters")
+                try:
+                    if cached_params["type"] == "postgresql":
+                        success = _db_manager.connect_postgresql(
+                            cached_params["host"], cached_params["port"], cached_params["database"],
+                            cached_params["username"], cached_params["password"]
+                        )
+                    else:  # snowflake
+                        success = _db_manager.connect_snowflake(
+                            cached_params["account"], cached_params["username"], cached_params["password"],
+                            cached_params["warehouse"], cached_params["database"], cached_params.get("schema", "PUBLIC")
+                        )
+                    if success:
+                        logger.info("Successfully restored connection from persistent cache")
+                    else:
+                        logger.error("Failed to restore connection from persistent cache")
+                except Exception as e:
+                    logger.error(f"Error restoring connection from cache: {e}")
     
     return _db_manager
 
@@ -292,6 +317,10 @@ def connect_database(db_type: str) -> str:
                 }
             
             if success:
+                # Save connection parameters to persistent cache
+                if db_manager._last_connection_params:
+                    save_connection_params(db_manager._last_connection_params)
+                
                 # Debug connection state after successful connection
                 logger.info(f"connect_database: Connection successful - Engine: {db_manager.has_engine()}, Params stored: {db_manager._last_connection_params is not None}")
                 
