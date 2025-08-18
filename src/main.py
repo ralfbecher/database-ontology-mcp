@@ -19,7 +19,7 @@ from .constants import (
 )
 from .database_manager import DatabaseManager, TableInfo
 from .ontology_generator import OntologyGenerator
-from .utils import setup_logging, sanitize_for_logging
+from .utils import setup_logging, sanitize_for_logging, sanitize_sql_for_logging
 
 # Initialize logging
 config = config_manager.get_server_config()
@@ -747,15 +747,19 @@ def validate_sql_syntax(sql_query: str) -> Union[Dict[str, Any], str]:
                 "validation_error"
             )
         
+        # Log SQL query safely (without credentials)
+        safe_query = sanitize_sql_for_logging(sql_query)
+        logger.info(f"Validating SQL query: {safe_query}")
+        
         db_manager = get_db_manager()
         try:
             validation_result = db_manager.validate_sql_syntax(sql_query)
             
-            # Log validation attempt for debugging
+            # Log validation result
             if validation_result["is_valid"]:
-                logger.info(f"SQL validation successful: {validation_result['query_type']}")
+                logger.info(f"SQL validation successful: {validation_result['query_type']}, affected tables: {validation_result.get('affected_tables', [])}")
             else:
-                logger.warning(f"SQL validation failed: {validation_result['error']}")
+                logger.warning(f"SQL validation failed: {validation_result['error_type']} - {validation_result['error']}")
             
             return validation_result
             
@@ -796,6 +800,10 @@ def execute_sql_query(
                 "validation_error"
             )
         
+        # Log SQL query safely (without credentials)
+        safe_query = sanitize_sql_for_logging(sql_query)
+        logger.info(f"Executing SQL query: {safe_query}")
+        
         # Validate limit parameter
         if not isinstance(limit, int) or limit <= 0:
             limit = 1000
@@ -805,11 +813,14 @@ def execute_sql_query(
         try:
             result = db_manager.execute_sql_query(sql_query, limit)
             
-            # Log execution results
+            # Log execution results with more detail
             if result["success"]:
-                logger.info(f"SQL executed: {result['row_count']} rows in {result['execution_time_ms']}ms")
+                logger.info(f"SQL execution successful: {result['row_count']} rows returned in {result['execution_time_ms']}ms" +
+                           (f", limit applied: {limit}" if result.get('limit_applied', False) else ""))
+                if result.get('warnings'):
+                    logger.info(f"SQL execution warnings: {result['warnings']}")
             else:
-                logger.warning(f"SQL execution failed: {result['error']}")
+                logger.error(f"SQL execution failed: {result['error_type']} - {result['error']}")
             
             return result
             

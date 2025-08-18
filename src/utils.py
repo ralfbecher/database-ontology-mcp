@@ -112,6 +112,45 @@ def sanitize_for_logging(data: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
+def sanitize_sql_for_logging(sql_query: str, max_length: int = 200) -> str:
+    """Safely sanitize SQL query for logging without exposing credentials.
+    
+    Args:
+        sql_query: SQL query to sanitize
+        max_length: Maximum length of logged query (default: 200 chars)
+    
+    Returns:
+        Sanitized SQL query safe for logging
+    """
+    if not sql_query:
+        return ""
+    
+    # Remove potential passwords, secrets, or sensitive data from SQL
+    # This is a basic approach - more sophisticated parsing could be added
+    sanitized = sql_query.strip()
+    
+    # Remove common credential patterns (case insensitive)
+    credential_patterns = [
+        r"password\s*[=:]\s*['\"][^'\"]*['\"]",
+        r"pwd\s*[=:]\s*['\"][^'\"]*['\"]", 
+        r"secret\s*[=:]\s*['\"][^'\"]*['\"]",
+        r"token\s*[=:]\s*['\"][^'\"]*['\"]",
+        r"key\s*[=:]\s*['\"][^'\"]*['\"]",
+    ]
+    
+    for pattern in credential_patterns:
+        sanitized = re.sub(pattern, "[CREDENTIAL_REDACTED]", sanitized, flags=re.IGNORECASE)
+    
+    # Truncate if too long and add ellipsis
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "..."
+    
+    # Replace multiple whitespaces with single spaces for cleaner logging
+    sanitized = re.sub(r'\s+', ' ', sanitized)
+    
+    return sanitized
+
+
 def validate_uri(uri: str) -> bool:
     """Validate URI format.
     
