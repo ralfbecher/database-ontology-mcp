@@ -49,7 +49,9 @@ class ServerState:
         """Get or create database manager instance."""
         if self._db_manager is None:
             self._db_manager = DatabaseManager()
-            logger.debug("Created new DatabaseManager instance")
+            logger.info(f"Created new DatabaseManager instance: {id(self._db_manager)}")
+        else:
+            logger.debug(f"Returning existing DatabaseManager instance: {id(self._db_manager)}")
         return self._db_manager
     
     def get_ontology_generator(self, base_uri: Optional[str] = None) -> OntologyGenerator:
@@ -260,6 +262,8 @@ def connect_database(db_type: str) -> str:
             )
         
         db_manager = _server_state.get_db_manager()
+        logger.info(f"connect_database: Got DatabaseManager instance: {id(db_manager)}")
+        logger.info(f"connect_database: Current engine state: {db_manager.has_engine()}")
         
         # Get database configuration from environment
         try:
@@ -311,6 +315,12 @@ def connect_database(db_type: str) -> str:
                 }
             
             if success:
+                # Verify connection was actually established
+                logger.info(f"connect_database: Connection successful, verifying state")
+                logger.info(f"connect_database: Engine exists after connection: {db_manager.has_engine()}")
+                logger.info(f"connect_database: Connection info: {db_manager.connection_info}")
+                logger.info(f"connect_database: Last connection params stored: {db_manager._last_connection_params is not None}")
+                
                 # Create safe logging info (without passwords)
                 safe_info = sanitize_for_logging({
                     "db_type": db_type,
@@ -447,9 +457,15 @@ def generate_ontology(
     """
     with error_handler("generate_ontology") as handler:
         db_manager = _server_state.get_db_manager()
+        logger.info(f"generate_ontology: Got DatabaseManager instance: {id(db_manager)}")
+        logger.info(f"generate_ontology: ServerState instance: {id(_server_state)}")
         
         # Debug connection status
         logger.info(f"generate_ontology: checking connection status")
+        logger.info(f"generate_ontology: Engine exists: {db_manager.has_engine()}")
+        logger.info(f"generate_ontology: Connection info: {db_manager.connection_info}")
+        logger.info(f"generate_ontology: Last connection params available: {db_manager._last_connection_params is not None}")
+        
         if not db_manager.has_engine():
             logger.error("generate_ontology: No database engine found")
             return create_error_response(
@@ -458,7 +474,7 @@ def generate_ontology(
                 "Please use connect_database tool first to establish a connection"
             )
         
-        logger.info(f"generate_ontology: Engine exists, connection info: {db_manager.connection_info}")
+        logger.info(f"generate_ontology: Engine exists, proceeding with ontology generation")
         
         try:
             tables = db_manager.get_tables(schema_name)
@@ -837,6 +853,36 @@ def execute_sql_query(
             )
 
 @mcp.tool()
+def debug_connection_state() -> Dict[str, Any]:
+    """Debug tool to examine DatabaseManager state across tool calls.
+    
+    Returns detailed information about the current DatabaseManager instance
+    and connection state for troubleshooting.
+    
+    Returns:
+        Dictionary with debugging information
+    """
+    db_manager = _server_state.get_db_manager()
+    
+    debug_info = {
+        "server_state_id": id(_server_state),
+        "db_manager_id": id(db_manager),
+        "has_engine": db_manager.has_engine(),
+        "connection_info": db_manager.connection_info.copy() if db_manager.connection_info else None,
+        "has_last_params": db_manager._last_connection_params is not None,
+        "is_connected": db_manager.is_connected() if db_manager.has_engine() else False
+    }
+    
+    if db_manager._last_connection_params:
+        # Sanitize the params (remove password)
+        sanitized_params = {k: v for k, v in db_manager._last_connection_params.items() if k != "password"}
+        sanitized_params["password"] = "[REDACTED]" if "password" in db_manager._last_connection_params else None
+        debug_info["last_connection_params"] = sanitized_params
+    
+    logger.info(f"debug_connection_state: {debug_info}")
+    return debug_info
+
+@mcp.tool()
 def check_connection_status() -> Union[Dict[str, Any], str]:
     """Check the current database connection status and health.
     
@@ -903,6 +949,7 @@ def get_server_info() -> Dict[str, Any]:
         ],
         "tools": [
             "connect_database",
+            "debug_connection_state",
             "check_connection_status",
             "list_schemas", 
             "analyze_schema",
