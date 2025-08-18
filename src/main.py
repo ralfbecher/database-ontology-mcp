@@ -479,7 +479,7 @@ def generate_ontology(
     Returns:
         RDF ontology in Turtle format or error response
     """
-    with error_handler("generate_ontology") as handler:
+    try:
         db_manager = get_db_manager()
         
         # Debug connection state
@@ -496,71 +496,70 @@ def generate_ontology(
                 "Please use connect_database tool first to establish a connection"
             )
         
-        try:
-            tables = db_manager.get_tables(schema_name)
-            if not tables:
-                return create_error_response(
-                    f"No tables found in schema '{schema_name or 'default'}'",
-                    "data_error",
-                    "Schema may not exist or may be empty"
-                )
-            
-            # Parallel table analysis
-            tables_info = []
-            with get_thread_pool() as executor:
-                future_to_table = {
-                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
-                    for table_name in tables
-                }
-                
-                for future in as_completed(future_to_table):
-                    try:
-                        table_info = future.result()
-                        if table_info:
-                            tables_info.append(table_info)
-                    except Exception as e:
-                        logger.warning(f"Failed to analyze table: {e}")
-            
-            if not tables_info:
-                return create_error_response(
-                    f"Could not analyze any tables in schema '{schema_name or 'default'}'",
-                    "data_error"
-                )
-            
-            # Generate ontology
-            uri = base_uri or config.ontology_base_uri
-            generator = OntologyGenerator(base_uri=uri)
-            ontology_ttl = generator.generate_from_schema(tables_info)
-            
-            if enrich_llm:
-                # Sample data for enrichment
-                data_samples = {}
-                for table in tables_info[:10]:  # Limit to first 10 tables for performance
-                    try:
-                        samples = db_manager.sample_table_data(
-                            table.name, 
-                            schema_name, 
-                            limit=MAX_ENRICHMENT_SAMPLES
-                        )
-                        if samples:
-                            data_samples[table.name] = samples
-                    except Exception as e:
-                        logger.warning(f"Could not sample data from table {table.name}: {e}")
-                
-                try:
-                    ontology_ttl = generator.enrich_with_llm(tables_info, data_samples)
-                except Exception as e:
-                    logger.warning(f"LLM enrichment failed, using basic ontology: {e}")
-            
-            logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
-            return ontology_ttl
-            
-        except RuntimeError as e:
+        tables = db_manager.get_tables(schema_name)
+        if not tables:
             return create_error_response(
-                "No database connection established",
-                "connection_error",
-                "Use connect_database tool first"
+                f"No tables found in schema '{schema_name or 'default'}'",
+                "data_error",
+                "Schema may not exist or may be empty"
             )
+        
+        # Parallel table analysis
+        tables_info = []
+        with get_thread_pool() as executor:
+            future_to_table = {
+                executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
+                for table_name in tables
+            }
+            
+            for future in as_completed(future_to_table):
+                try:
+                    table_info = future.result()
+                    if table_info:
+                        tables_info.append(table_info)
+                except Exception as e:
+                    logger.warning(f"Failed to analyze table: {e}")
+        
+        if not tables_info:
+            return create_error_response(
+                f"Could not analyze any tables in schema '{schema_name or 'default'}'",
+                "data_error"
+            )
+        
+        # Generate ontology
+        uri = base_uri or config.ontology_base_uri
+        generator = OntologyGenerator(base_uri=uri)
+        ontology_ttl = generator.generate_from_schema(tables_info)
+        
+        if enrich_llm:
+            # Sample data for enrichment
+            data_samples = {}
+            for table in tables_info[:10]:  # Limit to first 10 tables for performance
+                try:
+                    samples = db_manager.sample_table_data(
+                        table.name, 
+                        schema_name, 
+                        limit=MAX_ENRICHMENT_SAMPLES
+                    )
+                    if samples:
+                        data_samples[table.name] = samples
+                except Exception as e:
+                    logger.warning(f"Could not sample data from table {table.name}: {e}")
+            
+            try:
+                ontology_ttl = generator.enrich_with_llm(tables_info, data_samples)
+            except Exception as e:
+                logger.warning(f"LLM enrichment failed, using basic ontology: {e}")
+            
+        logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
+        return ontology_ttl
+        
+    except Exception as e:
+        logger.error(f"Error in generate_ontology: {e}")
+        return create_error_response(
+            f"Failed to generate ontology: {str(e)}",
+            "internal_error"
+        )
 
 @mcp.tool()
 def sample_table_data(
