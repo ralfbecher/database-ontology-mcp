@@ -35,11 +35,17 @@ _db_manager: Optional[DatabaseManager] = None
 _thread_pool: Optional[ThreadPoolExecutor] = None
 
 def get_db_manager() -> DatabaseManager:
-    """Get or create global database manager."""
+    """Get or create global database manager with auto-reconnection."""
     global _db_manager
     if _db_manager is None:
         _db_manager = DatabaseManager()
         logger.info("Created global DatabaseManager")
+    
+    # Auto-reconnect if connection is lost but we have stored params
+    if not _db_manager.has_engine() and _db_manager._last_connection_params:
+        logger.info("Auto-reconnecting to database using stored parameters")
+        _db_manager.restore_connection_if_needed()
+    
     return _db_manager
 
 def get_thread_pool() -> ThreadPoolExecutor:
@@ -234,6 +240,7 @@ def connect_database(db_type: str) -> str:
             )
         
         db_manager = get_db_manager()
+        logger.info(f"connect_database: DatabaseManager ID: {id(db_manager)}")
         
         # Get database configuration from environment
         try:
@@ -285,6 +292,9 @@ def connect_database(db_type: str) -> str:
                 }
             
             if success:
+                # Debug connection state after successful connection
+                logger.info(f"connect_database: Connection successful - Engine: {db_manager.has_engine()}, Params stored: {db_manager._last_connection_params is not None}")
+                
                 # Create safe logging info (without passwords)
                 safe_info = sanitize_for_logging({
                     "db_type": db_type,
@@ -431,8 +441,14 @@ def generate_ontology(
     with error_handler("generate_ontology") as handler:
         db_manager = get_db_manager()
         
-        # Simple connection check
+        # Debug connection state
+        logger.info(f"generate_ontology: DatabaseManager ID: {id(db_manager)}")
+        logger.info(f"generate_ontology: Has engine: {db_manager.has_engine()}")
+        logger.info(f"generate_ontology: Has stored params: {db_manager._last_connection_params is not None}")
+        
+        # Connection check with clear error message
         if not db_manager.has_engine():
+            logger.error("generate_ontology: No database engine - connection was lost or never established")
             return create_error_response(
                 "No database connection established",
                 "connection_error",
