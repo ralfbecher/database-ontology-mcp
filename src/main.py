@@ -825,6 +825,46 @@ def execute_sql_query(
             )
 
 @mcp.tool()
+def check_connection_status() -> Union[Dict[str, Any], str]:
+    """Check the current database connection status and health.
+    
+    This tool provides detailed information about the database connection state,
+    including whether the connection is healthy, connection details, and 
+    reconnection capabilities.
+    
+    Returns:
+        Dictionary with connection status information
+    """
+    with error_handler("check_connection_status") as handler:
+        db_manager = _server_state.get_db_manager()
+        try:
+            status = db_manager.get_connection_status()
+            
+            # Add user-friendly status message
+            if status["connected"]:
+                db_info = status["connection_info"]
+                if db_info and db_info.get("type") == "postgresql":
+                    status["status_message"] = f"✅ Connected to PostgreSQL: {db_info['database']} at {db_info['host']}:{db_info['port']}"
+                elif db_info and db_info.get("type") == "snowflake":
+                    status["status_message"] = f"✅ Connected to Snowflake: {db_info['database']} (account: {db_info['account']})"
+                else:
+                    status["status_message"] = "✅ Database connection is healthy"
+            else:
+                if status["last_params_available"]:
+                    status["status_message"] = "⚠️ Connection lost but auto-reconnection is available"
+                else:
+                    status["status_message"] = "❌ No database connection established"
+            
+            logger.debug(f"Connection status checked: {status['connected']}")
+            return status
+            
+        except Exception as e:
+            return create_error_response(
+                f"Error checking connection status: {str(e)}",
+                "connection_check_error"
+            )
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
     
@@ -837,9 +877,10 @@ def get_server_info() -> Dict[str, Any]:
         "description": "Enhanced MCP server for database schema analysis and ontology generation",
         "supported_databases": SUPPORTED_DB_TYPES,
         "features": [
-            "Enhanced database connection management with pooling",
+            "Enhanced database connection management with pooling and auto-reconnection",
             "Parallel schema analysis for improved performance", 
             "Advanced error handling and validation",
+            "Connection health monitoring and recovery",
             "Structured logging and observability",
             "Security-enhanced credential handling",
             "RDF/OWL ontology generation with validation",
@@ -850,6 +891,7 @@ def get_server_info() -> Dict[str, Any]:
         ],
         "tools": [
             "connect_database",
+            "check_connection_status",
             "list_schemas", 
             "analyze_schema",
             "generate_ontology",

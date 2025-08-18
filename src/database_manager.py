@@ -53,7 +53,7 @@ class TableInfo:
 
 
 class DatabaseManager:
-    """Manages database connections and schema analysis."""
+    """Manages database connections and schema analysis with enhanced reliability."""
     
     def __init__(self):
         self.engine: Optional[Engine] = None
@@ -61,18 +61,73 @@ class DatabaseManager:
         self.connection_info: Dict[str, Any] = {}
         self._connection_pool_size = 5
         self._max_overflow = 10
+        self._last_connection_params: Optional[Dict[str, Any]] = None
+        
+    def _test_connection(self) -> bool:
+        """Test if the current connection is healthy."""
+        if not self.engine:
+            return False
+        
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                return True
+        except Exception as e:
+            logger.warning(f"Connection health check failed: {e}")
+            return False
+    
+    def _ensure_connection(self):
+        """Ensure we have a healthy database connection, reconnecting if necessary."""
+        if not self.engine or not self._test_connection():
+            if self._last_connection_params:
+                logger.info("Reconnecting to database due to connection loss")
+                self._reconnect()
+            else:
+                raise RuntimeError("No database connection established and no connection parameters available")
+    
+    def _reconnect(self):
+        """Reconnect to the database using stored parameters."""
+        if not self._last_connection_params:
+            raise RuntimeError("No connection parameters stored for reconnection")
+        
+        params = self._last_connection_params
+        if params["type"] == "postgresql":
+            success = self.connect_postgresql(
+                params["host"], params["port"], params["database"],
+                params["username"], params["password"]
+            )
+        else:  # snowflake
+            success = self.connect_snowflake(
+                params["account"], params["username"], params["password"],
+                params["warehouse"], params["database"], params.get("schema", "PUBLIC")
+            )
+        
+        if not success:
+            raise RuntimeError(f"Failed to reconnect to {params['type']} database")
+        
+        logger.info(f"Successfully reconnected to {params['type']} database")
         
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections."""
-        if not self.engine:
-            raise RuntimeError("No database connection established")
+        """Context manager for database connections with auto-reconnection."""
+        self._ensure_connection()
         
-        conn = self.engine.connect()
-        try:
-            yield conn
-        finally:
-            conn.close()
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                conn = self.engine.connect()
+                try:
+                    yield conn
+                finally:
+                    conn.close()
+                break  # Success, exit retry loop
+            except (OperationalError, DatabaseError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Connection failed (attempt {attempt + 1}), retrying: {e}")
+                    self._reconnect()
+                else:
+                    logger.error(f"Connection failed after {max_retries} attempts: {e}")
+                    raise
         
     def connect_postgresql(self, host: str, port: int, database: str, 
                           username: str, password: str) -> bool:
@@ -107,8 +162,18 @@ class DatabaseManager:
                 "username": username
             }
             
+            # Store connection parameters for reconnection
+            self._last_connection_params = {
+                "type": "postgresql",
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "password": password
+            }
+            
             # Test connection with timeout
-            with self.get_connection() as conn:
+            with self.engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
             
@@ -161,8 +226,19 @@ class DatabaseManager:
                 "schema": schema
             }
             
+            # Store connection parameters for reconnection
+            self._last_connection_params = {
+                "type": "snowflake",
+                "account": account,
+                "username": username,
+                "password": password,
+                "warehouse": warehouse,
+                "database": database,
+                "schema": schema
+            }
+            
             # Test connection with timeout
-            with self.get_connection() as conn:
+            with self.engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
             
@@ -729,11 +805,34 @@ class DatabaseManager:
             
         return result_data
     
+    def is_connected(self) -> bool:
+        """Check if database is currently connected and healthy."""
+        return self._test_connection()
+    
+    def get_connection_status(self) -> Dict[str, Any]:
+        """Get detailed connection status information."""
+        if not self.engine:
+            return {
+                "connected": False,
+                "connection_info": None,
+                "last_params_available": self._last_connection_params is not None
+            }
+        
+        is_healthy = self._test_connection()
+        return {
+            "connected": is_healthy,
+            "connection_info": self.connection_info.copy(),
+            "last_params_available": self._last_connection_params is not None,
+            "engine_pool_size": self.engine.pool.size() if hasattr(self.engine, 'pool') else None,
+            "engine_checked_out": self.engine.pool.checkedout() if hasattr(self.engine, 'pool') else None
+        }
+    
     def disconnect(self):
-        """Close the database connection."""
+        """Close the database connection and clear stored parameters."""
         if self.engine:
             self.engine.dispose()
             self.engine = None
             self.metadata = None
             self.connection_info = {}
-            logger.info("Database connection closed")
+            self._last_connection_params = None
+            logger.info("Database connection closed and parameters cleared")
