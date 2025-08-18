@@ -78,12 +78,19 @@ class DatabaseManager:
     
     def _ensure_connection(self):
         """Ensure we have a healthy database connection, reconnecting if necessary."""
-        if not self.engine or not self._test_connection():
+        if not self.engine:
             if self._last_connection_params:
-                logger.info("Reconnecting to database due to connection loss")
+                logger.info("No engine found, reconnecting to database using stored parameters")
                 self._reconnect()
             else:
                 raise RuntimeError("No database connection established and no connection parameters available")
+        elif not self._test_connection():
+            if self._last_connection_params:
+                logger.info("Connection health check failed, reconnecting to database")
+                self._reconnect()
+            else:
+                logger.error("Connection unhealthy but no reconnection parameters available")
+                raise RuntimeError("Database connection is unhealthy and cannot be restored")
     
     def _reconnect(self):
         """Reconnect to the database using stored parameters."""
@@ -110,9 +117,14 @@ class DatabaseManager:
     @contextmanager
     def get_connection(self):
         """Context manager for database connections with auto-reconnection."""
-        self._ensure_connection()
+        # Basic connection check first
+        if not self.engine:
+            raise RuntimeError("No database connection established")
         
+        # Try connection with retry logic
         max_retries = 2
+        last_exception = None
+        
         for attempt in range(max_retries):
             try:
                 conn = self.engine.connect()
@@ -120,14 +132,26 @@ class DatabaseManager:
                     yield conn
                 finally:
                     conn.close()
-                break  # Success, exit retry loop
+                return  # Success, exit method
             except (OperationalError, DatabaseError) as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"Connection failed (attempt {attempt + 1}), retrying: {e}")
-                    self._reconnect()
-                else:
-                    logger.error(f"Connection failed after {max_retries} attempts: {e}")
-                    raise
+                last_exception = e
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
+                
+                if attempt < max_retries - 1:  # Not the last attempt
+                    if self._last_connection_params:
+                        logger.info("Attempting reconnection...")
+                        try:
+                            self._reconnect()
+                        except Exception as reconnect_error:
+                            logger.error(f"Reconnection failed: {reconnect_error}")
+                            # Continue to next attempt or fail
+                    else:
+                        logger.error("No connection parameters available for reconnection")
+                        break
+                        
+        # If we get here, all attempts failed
+        logger.error(f"All connection attempts failed. Last error: {last_exception}")
+        raise RuntimeError(f"Database connection failed after {max_retries} attempts: {last_exception}")
         
     def connect_postgresql(self, host: str, port: int, database: str, 
                           username: str, password: str) -> bool:
@@ -805,9 +829,13 @@ class DatabaseManager:
             
         return result_data
     
+    def has_engine(self) -> bool:
+        """Check if database engine exists (basic connection check)."""
+        return self.engine is not None
+    
     def is_connected(self) -> bool:
         """Check if database is currently connected and healthy."""
-        return self._test_connection()
+        return self.has_engine() and self._test_connection()
     
     def get_connection_status(self) -> Dict[str, Any]:
         """Get detailed connection status information."""

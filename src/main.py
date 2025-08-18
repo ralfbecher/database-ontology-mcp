@@ -448,6 +448,18 @@ def generate_ontology(
     with error_handler("generate_ontology") as handler:
         db_manager = _server_state.get_db_manager()
         
+        # Debug connection status
+        logger.info(f"generate_ontology: checking connection status")
+        if not db_manager.has_engine():
+            logger.error("generate_ontology: No database engine found")
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Please use connect_database tool first to establish a connection"
+            )
+        
+        logger.info(f"generate_ontology: Engine exists, connection info: {db_manager.connection_info}")
+        
         try:
             tables = db_manager.get_tables(schema_name)
             if not tables:
