@@ -359,7 +359,7 @@ def analyze_schema(schema_name: Optional[str] = None) -> Union[Dict[str, Any], s
             
             # Parallel table analysis for better performance
             all_table_info = []
-            with _server_state.thread_pool as executor:
+            with get_thread_pool() as executor:
                 future_to_table = {
                     executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
                     for table_name in tables
@@ -569,65 +569,73 @@ def get_enrichment_data(schema_name: Optional[str] = None) -> Union[Dict[str, An
     Returns:
         Dictionary containing schema data and enrichment instructions or error response
     """
-    with error_handler("get_enrichment_data") as handler:
+    try:
         db_manager = get_db_manager()
         
-        try:
-            tables = db_manager.get_tables(schema_name)
-            if not tables:
-                return create_error_response(
-                    f"No tables found in schema '{schema_name or 'default'}'",
-                    "data_error"
-                )
-            
-            # Analyze tables in parallel
-            tables_info = []
-            with _server_state.thread_pool as executor:
-                future_to_table = {
-                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
-                    for table_name in tables
-                }
-                
-                for future in as_completed(future_to_table):
-                    try:
-                        table_info = future.result()
-                        if table_info:
-                            tables_info.append(table_info)
-                    except Exception as e:
-                        logger.warning(f"Failed to analyze table: {e}")
-            
-            if not tables_info:
-                return create_error_response(
-                    f"Could not analyze any tables in schema '{schema_name or 'default'}'",
-                    "data_error"
-                )
-            
-            # Get sample data for enrichment
-            data_samples = {}
-            for table in tables_info[:10]:  # Limit for performance
-                try:
-                    samples = db_manager.sample_table_data(
-                        table.name, 
-                        schema_name, 
-                        limit=MAX_ENRICHMENT_SAMPLES
-                    )
-                    if samples:
-                        data_samples[table.name] = samples
-                except Exception as e:
-                    logger.warning(f"Could not sample data from table {table.name}: {e}")
-            
-            generator = _server_state.get_ontology_generator()
-            enrichment_data = generator.get_enrichment_data(tables_info, data_samples)
-            
-            logger.info(f"Generated enrichment data for {len(tables_info)} tables")
-            return enrichment_data
-            
-        except RuntimeError as e:
+        # Check connection
+        if not db_manager.has_engine():
             return create_error_response(
                 "No database connection established",
                 "connection_error",
                 "Use connect_database tool first"
             )
+        
+        tables = db_manager.get_tables(schema_name)
+        if not tables:
+            return create_error_response(
+                f"No tables found in schema '{schema_name or 'default'}'",
+                "data_error"
+            )
+        
+        # Analyze tables in parallel
+        tables_info = []
+        with get_thread_pool() as executor:
+            future_to_table = {
+                executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
+                for table_name in tables
+            }
+            
+            for future in as_completed(future_to_table):
+                try:
+                    table_info = future.result()
+                    if table_info:
+                        tables_info.append(table_info)
+                except Exception as e:
+                    logger.warning(f"Failed to analyze table: {e}")
+        
+        if not tables_info:
+            return create_error_response(
+                f"Could not analyze any tables in schema '{schema_name or 'default'}'",
+                "data_error"
+            )
+        
+        # Get sample data for enrichment
+        data_samples = {}
+        for table in tables_info[:10]:  # Limit for performance
+            try:
+                samples = db_manager.sample_table_data(
+                    table.name, 
+                    schema_name, 
+                    limit=MAX_ENRICHMENT_SAMPLES
+                )
+                if samples:
+                    data_samples[table.name] = samples
+            except Exception as e:
+                logger.warning(f"Could not sample data from table {table.name}: {e}")
+        
+        uri = config.ontology_base_uri
+        generator = OntologyGenerator(base_uri=uri)
+        enrichment_data = generator.get_enrichment_data(tables_info, data_samples)
+        
+        logger.info(f"Generated enrichment data for {len(tables_info)} tables")
+        return enrichment_data
+        
+    except Exception as e:
+        logger.error(f"Error in get_enrichment_data: {e}")
+        return create_error_response(
+            f"Failed to get enrichment data: {str(e)}",
+            "internal_error"
+        )
 
 @mcp.tool()
 def apply_ontology_enrichment(
@@ -673,7 +681,7 @@ def apply_ontology_enrichment(
             
             # Analyze tables
             tables_info = []
-            with _server_state.thread_pool as executor:
+            with get_thread_pool() as executor:
                 future_to_table = {
                     executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
                     for table_name in tables
@@ -694,7 +702,8 @@ def apply_ontology_enrichment(
                 )
             
             # Generate and enrich ontology
-            generator = _server_state.get_ontology_generator(base_uri)
+            uri = base_uri or config.ontology_base_uri
+            generator = OntologyGenerator(base_uri=uri)
             base_ontology = generator.generate_from_schema(tables_info)
             
             try:
