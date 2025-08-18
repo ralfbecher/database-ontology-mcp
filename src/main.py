@@ -239,29 +239,14 @@ Provide meaningful, business-oriented names and descriptions that would make sen
 # --- Enhanced MCP Tools with Better Validation ---
 
 @mcp.tool()
-def connect_database(
-    db_type: str,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-    database: Optional[str] = None,
-    username: Optional[str] = None,
-    password: Optional[str] = None,
-    account: Optional[str] = None,
-    warehouse: Optional[str] = None,
-    schema: Optional[str] = None
-) -> str:
-    """Connect to a database (PostgreSQL or Snowflake) with enhanced validation and security.
+def connect_database(db_type: str) -> str:
+    """Connect to a database using predefined credentials from environment configuration.
+    
+    This tool automatically uses the database credentials configured in the .env file,
+    eliminating the need for users to provide connection details in chat.
     
     Args:
         db_type: Database type - must be 'postgresql' or 'snowflake'
-        host: Database host (required for PostgreSQL)
-        port: Database port (required for PostgreSQL)
-        database: Database name (required)
-        username: Database username (required)
-        password: Database password (required)
-        account: Snowflake account identifier (required for Snowflake)
-        warehouse: Snowflake warehouse (required for Snowflake)
-        schema: Database schema (optional, defaults based on database type)
     
     Returns:
         Success message or error JSON
@@ -276,62 +261,73 @@ def connect_database(
         
         db_manager = _server_state.get_db_manager()
         
-        # Use configuration validation
+        # Get database configuration from environment
         try:
             config_validation = config_manager.validate_db_config(db_type)
             if not config_validation["valid"]:
-                # Check if parameters were provided directly
-                if db_type == "postgresql":
-                    required_params = {"host": host, "port": port, "database": database, 
-                                     "username": username, "password": password}
-                else:  # snowflake
-                    required_params = {"account": account, "username": username, "password": password,
-                                     "warehouse": warehouse, "database": database}
-                
-                missing_direct = [k for k, v in required_params.items() if v is None]
-                if missing_direct:
-                    return create_error_response(
-                        f"Missing required parameters for {db_type}: {', '.join(missing_direct)}",
-                        "validation_error",
-                        "Provide parameters directly or set environment variables"
-                    )
+                missing_params = config_validation["missing_params"]
+                return create_error_response(
+                    f"Missing required environment configuration for {db_type}: {', '.join(missing_params)}",
+                    "configuration_error",
+                    f"Please set the following environment variables in .env: {', '.join([p.upper() for p in missing_params])}"
+                )
+            
+            # Get the validated configuration
+            db_config = config_manager.get_database_config()
+            config_params = config_validation["config"]
+            
         except ValueError as e:
             return create_error_response(str(e), "validation_error")
         
-        # Attempt connection
+        # Attempt connection using predefined credentials
         try:
             if db_type == "postgresql":
                 success = db_manager.connect_postgresql(
-                    host=str(host),
-                    port=int(port) if port else 5432,
-                    database=str(database),
-                    username=str(username),
-                    password=str(password)
+                    host=db_config.postgres_host,
+                    port=db_config.postgres_port,
+                    database=db_config.postgres_database,
+                    username=db_config.postgres_username,
+                    password=db_config.postgres_password
                 )
+                connection_info = {
+                    "database": db_config.postgres_database,
+                    "host": db_config.postgres_host,
+                    "port": db_config.postgres_port
+                }
             else:  # snowflake
                 success = db_manager.connect_snowflake(
-                    account=str(account),
-                    username=str(username),
-                    password=str(password),
-                    warehouse=str(warehouse),
-                    database=str(database),
-                    schema=schema or "PUBLIC"
+                    account=db_config.snowflake_account,
+                    username=db_config.snowflake_username,
+                    password=db_config.snowflake_password,
+                    warehouse=db_config.snowflake_warehouse,
+                    database=db_config.snowflake_database,
+                    schema=db_config.snowflake_schema
                 )
+                connection_info = {
+                    "database": db_config.snowflake_database,
+                    "account": db_config.snowflake_account,
+                    "warehouse": db_config.snowflake_warehouse,
+                    "schema": db_config.snowflake_schema
+                }
             
             if success:
+                # Create safe logging info (without passwords)
                 safe_info = sanitize_for_logging({
                     "db_type": db_type,
-                    "database": database,
-                    "host": host if db_type == "postgresql" else None,
-                    "account": account if db_type == "snowflake" else None
+                    **{k: v for k, v in connection_info.items() if k != "password"}
                 })
                 logger.info(f"Successfully connected to {db_type}: {safe_info}")
-                return f"Successfully connected to {db_type} database: {database}"
+                
+                # Create user-friendly success message
+                if db_type == "postgresql":
+                    return f"✅ Successfully connected to PostgreSQL database: {connection_info['database']} at {connection_info['host']}:{connection_info['port']}"
+                else:
+                    return f"✅ Successfully connected to Snowflake database: {connection_info['database']} (account: {connection_info['account']}, warehouse: {connection_info['warehouse']})"
             else:
                 return create_error_response(
-                    f"Failed to connect to {db_type} database: {database}",
+                    f"Failed to connect to {db_type} database using configured credentials",
                     "connection_error",
-                    "Check connection parameters and network connectivity"
+                    "Check your .env file configuration and network connectivity"
                 )
                 
         except Exception as e:
