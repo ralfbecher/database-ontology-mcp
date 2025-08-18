@@ -43,34 +43,46 @@ def get_db_manager() -> DatabaseManager:
         logger.info("Created global DatabaseManager")
     
     # Auto-reconnect using persistent cache if no connection
+    logger.debug(f"get_db_manager: Engine exists: {_db_manager.has_engine()}")
     if not _db_manager.has_engine():
+        logger.info("get_db_manager: No engine found, attempting reconnection")
+        
         # Try database manager's stored params first
         if _db_manager._last_connection_params:
             logger.info("Auto-reconnecting using DatabaseManager stored parameters")
             _db_manager.restore_connection_if_needed()
         else:
+            logger.info("No DatabaseManager stored params, trying persistent cache")
             # Fall back to persistent cache
             cached_params = load_connection_params()
             if cached_params:
-                logger.info("Auto-reconnecting using persistent cache parameters")
+                logger.info(f"Found cached params for {cached_params.get('type', 'unknown')} database")
                 try:
                     if cached_params["type"] == "postgresql":
+                        logger.info("Attempting PostgreSQL reconnection from cache")
                         success = _db_manager.connect_postgresql(
                             cached_params["host"], cached_params["port"], cached_params["database"],
                             cached_params["username"], cached_params["password"]
                         )
                     else:  # snowflake
+                        logger.info("Attempting Snowflake reconnection from cache")
                         success = _db_manager.connect_snowflake(
                             cached_params["account"], cached_params["username"], cached_params["password"],
                             cached_params["warehouse"], cached_params["database"], cached_params.get("schema", "PUBLIC")
                         )
+                    
                     if success:
-                        logger.info("Successfully restored connection from persistent cache")
+                        logger.info("✅ Successfully restored connection from persistent cache")
                     else:
-                        logger.error("Failed to restore connection from persistent cache")
+                        logger.error("❌ Failed to restore connection from persistent cache")
                 except Exception as e:
-                    logger.error(f"Error restoring connection from cache: {e}")
+                    logger.error(f"❌ Error restoring connection from cache: {e}")
+            else:
+                logger.warning("No cached connection parameters found")
+    else:
+        logger.debug("get_db_manager: Engine already exists, connection OK")
     
+    logger.info(f"get_db_manager: Final state - Engine: {_db_manager.has_engine()}")
     return _db_manager
 
 def get_thread_pool() -> ThreadPoolExecutor:

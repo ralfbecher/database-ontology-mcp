@@ -8,8 +8,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Store connection params in a temporary file
-CACHE_FILE = Path.home() / ".mcp_db_connection.json"
+# Store connection params in project directory (accessible within working dir)
+CACHE_FILE = Path(__file__).parent.parent / ".mcp_db_connection.json"
 
 def save_connection_params(params: Dict[str, Any]) -> None:
     """Save database connection parameters to cache file."""
