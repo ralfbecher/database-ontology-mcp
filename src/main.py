@@ -419,29 +419,29 @@ def analyze_schema(schema_name: Optional[str] = None) -> Union[Dict[str, Any], s
                     if table_info:
                         # Convert dataclass to dict for JSON serialization
                         table_dict = {
-                                "name": table_info.name,
-                                "schema": table_info.schema,
-                                "columns": [
-                                    {
-                                        "name": col.name,
-                                        "data_type": col.data_type,
-                                        "is_nullable": col.is_nullable,
-                                        "is_primary_key": col.is_primary_key,
-                                        "is_foreign_key": col.is_foreign_key,
-                                        "foreign_key_table": col.foreign_key_table,
-                                        "foreign_key_column": col.foreign_key_column,
-                                        "comment": col.comment
-                                    } for col in table_info.columns
-                                ],
-                                "primary_keys": table_info.primary_keys,
-                                "foreign_keys": table_info.foreign_keys,
-                                "comment": table_info.comment,
-                                "row_count": table_info.row_count,
-                                "sample_data": table_info.sample_data
-                            }
-                            all_table_info.append(table_dict)
-                    except Exception as e:
-                        logger.warning(f"Failed to analyze table {table_name}: {e}")
+                            "name": table_info.name,
+                            "schema": table_info.schema,
+                            "columns": [
+                                {
+                                    "name": col.name,
+                                    "data_type": col.data_type,
+                                    "is_nullable": col.is_nullable,
+                                    "is_primary_key": col.is_primary_key,
+                                    "is_foreign_key": col.is_foreign_key,
+                                    "foreign_key_table": col.foreign_key_table,
+                                    "foreign_key_column": col.foreign_key_column,
+                                    "comment": col.comment
+                                } for col in table_info.columns
+                            ],
+                            "primary_keys": table_info.primary_keys,
+                            "foreign_keys": table_info.foreign_keys,
+                            "comment": table_info.comment,
+                            "row_count": table_info.row_count,
+                            "sample_data": table_info.sample_data
+                        }
+                        all_table_info.append(table_dict)
+                except Exception as e:
+                    logger.warning(f"Failed to analyze table {table_name}: {e}")
             
             result = {
                 "schema": schema_name or "default",
@@ -577,7 +577,7 @@ def sample_table_data(
         db_manager = get_db_manager()
         try:
             sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
-            logger.debug(f"Sampled {len(sample_data)} rows from {table_name}")
+            logger.debug(f"Sampled {len(sample_data)} rows from table {table_name}")
             return sample_data
         except (ValueError, RuntimeError) as e:
             return create_error_response(str(e), "validation_error")
@@ -727,19 +727,13 @@ def apply_ontology_enrichment(
             
             # Analyze tables
             tables_info = []
-            executor = get_thread_pool()
-                future_to_table = {
-                    executor.submit(db_manager.analyze_table, table_name, schema_name): table_name
-                    for table_name in tables
-                }
-                
-                for future in as_completed(future_to_table):
-                    try:
-                        table_info = future.result()
-                        if table_info:
-                            tables_info.append(table_info)
-                    except Exception as e:
-                        logger.warning(f"Failed to analyze table: {e}")
+            for table_name in tables:
+                try:
+                    table_info = db_manager.analyze_table(table_name, schema_name)
+                    if table_info:
+                        tables_info.append(table_info)
+                except Exception as e:
+                    logger.warning(f"Failed to analyze table {table_name}: {e}")
             
             if not tables_info:
                 return create_error_response(
@@ -831,7 +825,324 @@ def execute_sql_query(
     This tool executes SQL queries with built-in safety measures including automatic
     validation, result limits, and execution timeouts. Only SELECT, CTE, and metadata
     queries are allowed for security.
-    
+
+    Before executing an SQL query, it can be validated against the database's SQL parser 
+    with the tool: validate_sql_syntax
+
+    Additionally, the query should be checked for multi-fact scenario and rewritten
+    to prevent SQL traps.
+
+    An Ontology of the schema can be generated with the tool: generate_ontology. This 
+    can be used as guidelines and guardrails for query generation.
+
+    # Execute SQL Query Tool - Complete Documentation
+
+    ## Overview
+
+    Execute a validated SQL query and return results safely with built-in safety measures 
+    including automatic validation, result limits, and execution timeouts. 
+    Only SELECT, CTE, and metadata queries are allowed for security.
+
+    ## Prerequisites
+
+    Before executing any SQL query, you MUST follow this workflow:
+
+    1. **Connect to Database**: Use `connect_database()` to establish connection
+    2. **Analyze Schema**: Use `analyze_schema()` to understand table structure
+    3. **Check Relationships**: Use `get_table_relationships()` to identify potential fan-traps
+    4. **Generate Ontology** (optional): Use `generate_ontology()` for complex schemas
+    5. **Validate Syntax**: Use `validate_sql_syntax()` before execution
+
+    ## 🚨 CRITICAL SQL TRAP PREVENTION PROTOCOL 🚨
+
+    ### MANDATORY PRE-EXECUTION CHECKLIST
+
+    **1. 🔍 RELATIONSHIP ANALYSIS (REQUIRED)**
+    - ALWAYS call `get_table_relationships()` first
+    - Identify ALL 1:many relationships in your query
+    - Flag any table appearing on "many" side of multiple relationships
+
+    **2. 🎯 FAN-TRAP DETECTION (CRITICAL)**
+
+    **IMMEDIATE RED FLAGS:**
+    - ❌ Sales + Shipments + SUM() = GUARANTEED FAN-TRAP
+    - ❌ Any fact table + dimension + aggregation = HIGH RISK
+    - ❌ Multiple LEFT JOINs + GROUP BY = DANGER ZONE
+    - ❌ Joining 3+ tables with SUM/COUNT/AVG = LIKELY INFLATED RESULTS
+
+    **PATTERN CHECK:**
+    ```
+    If query has: FROM tableA JOIN tableB JOIN tableC 
+    WHERE tableA→tableB (1:many) AND tableA→tableC (1:many)
+    Then: GUARANTEED CARTESIAN PRODUCT MULTIPLICATION
+    Result: SUM(tableA.amount) will be artificially inflated!
+    ```
+
+    **3. 🛡️ MANDATORY VALIDATION**
+    - Call `validate_sql_syntax()` before execution
+    - Review warnings about query complexity
+    - Check for multiple table joins with aggregation
+
+    ## ✅ SAFE QUERY PATTERNS
+
+    ### 🔒 PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
+
+    **Best for:** Multiple fact tables (sales, shipments, returns, etc.)
+
+    ```sql
+    WITH unified_facts AS (
+        -- Sales facts
+        SELECT 
+            client_id, 
+            product_id, 
+            sales_amount as amount, 
+            0 as shipment_qty, 
+            0 as return_qty,
+            'SALES' as fact_type
+        FROM sales
+        
+        UNION ALL
+        
+        -- Shipment facts  
+        SELECT 
+            client_id, 
+            product_id, 
+            0 as amount, 
+            shipment_quantity, 
+            0 as return_qty,
+            'SHIPMENT' as fact_type
+        FROM shipments s JOIN sales sal ON s.sales_id = sal.id
+        
+        UNION ALL
+        
+        -- Return facts
+        SELECT 
+            client_id, 
+            product_id, 
+            0 as amount, 
+            0 as shipment_qty, 
+            return_quantity,
+            'RETURN' as fact_type  
+        FROM returns r JOIN sales sal ON r.sales_id = sal.id
+    )
+    SELECT 
+        client_id,
+        product_id,
+        SUM(amount) as total_sales,
+        SUM(shipment_qty) as total_shipped,
+        SUM(return_qty) as total_returned
+    FROM unified_facts 
+    GROUP BY client_id, product_id;
+    ```
+
+    **Advantages:**
+    - ✅ Natural fan-trap immunity by design
+    - ✅ Unified data model for consistent aggregation
+    - ✅ Easy to extend with additional fact types
+    - ✅ Single aggregation logic for all measures
+    - ✅ Better performance with fewer table scans
+
+    ### 🔒 PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
+
+    **Use when:** UNION approach is not suitable
+
+    ```sql
+    WITH fact1_totals AS (
+        SELECT key, SUM(amount) as total_amount 
+        FROM fact1 GROUP BY key
+    ),
+    fact2_totals AS (
+        SELECT key, SUM(quantity) as total_quantity 
+        FROM fact2 GROUP BY key
+    )
+    SELECT 
+        f1.key, 
+        f1.total_amount,
+        COALESCE(f2.total_quantity, 0) as total_quantity
+    FROM fact1_totals f1 
+    LEFT JOIN fact2_totals f2 ON f1.key = f2.key;
+    ```
+
+    ### 🔒 PATTERN 3 - DISTINCT AGGREGATION (USE CAREFULLY)
+
+    **Warning:** Only use when you fully understand the data relationships
+
+    ```sql
+    SELECT 
+        key, 
+        SUM(DISTINCT fact1.amount) as total_amount,
+        SUM(fact2.quantity) as total_quantity 
+    FROM fact1 
+    LEFT JOIN fact2 ON fact1.id = fact2.fact1_id 
+    GROUP BY key;
+    ```
+
+    ### 🔒 PATTERN 4 - WINDOW FUNCTIONS
+
+    **For:** Complex analytical queries with preserved granularity
+
+    ```sql
+    SELECT DISTINCT 
+        key, 
+        SUM(amount) OVER (PARTITION BY key) as total_amount,
+        pre_aggregated_quantity
+    FROM fact1 
+    LEFT JOIN (
+        SELECT key, SUM(qty) as pre_aggregated_quantity 
+        FROM fact2 GROUP BY key
+    ) f2 USING(key);
+    ```
+
+    ## 🔄 RESULT VALIDATION (POST-EXECUTION)
+
+    **Always verify results make business sense:**
+    - Compare totals with business expectations
+    - Verify: `SELECT SUM(amount) FROM base_table` vs your query result
+    - Check row counts are reasonable
+    - If results seem too high → likely fan-trap occurred
+
+    ## 📋 COMMON DEADLY COMBINATIONS TO AVOID
+
+    ❌ **Never do these without proper fan-trap prevention:**
+    - `sales LEFT JOIN shipments + SUM(sales.amount)`
+    - `orders LEFT JOIN order_items LEFT JOIN products + SUM(orders.total)`
+    - `customers LEFT JOIN transactions LEFT JOIN transaction_items + aggregation`
+    - Any query joining parent→child1 + parent→child2 with SUM/COUNT
+
+    ## 🎯 RELATIONSHIP ANALYSIS EXAMPLES
+
+    **SAFE (1:1 relationships):**
+    ```
+    customers → customer_profiles (1:1) ✅
+    ```
+
+    **RISKY (1:many):**
+    ```
+    customers → orders (1:many) ⚠️
+    ```
+
+    **DEADLY (fan-trap):**
+    ```
+    orders → order_items (1:many) + orders → shipments (1:many) 🚨
+    ```
+
+    **IF YOUR QUERY INCLUDES THE DEADLY PATTERN:**
+    → STOP! Rewrite using UNION approach or separate aggregation CTEs
+
+    ## 🔧 EMERGENCY FAN-TRAP FIX
+
+    If you suspect fan-trap in existing query:
+    1. **Split into UNION approach** (recommended)
+    2. **Use separate aggregations**
+    3. **Add DISTINCT in SUM()** as temporary fix
+    4. **Validate results** against source tables
+    5. **Always aggregate fact tables separately** before joining
+
+    **Remember:** Fan-traps cause SILENT DATA CORRUPTION! Your query will execute successfully but return WRONG RESULTS. The bigger the multiplication factor, the more wrong your data becomes.
+
+    ## ⚡ AUTOMATED CHECK
+
+    If your query involves more than 2 tables and includes SUM/COUNT/AVG, you MUST analyze for fan-traps before execution. No exceptions!
+
+    ## 🎯 SUCCESS CRITERIA
+
+    Only proceed with `execute_sql_query()` after ALL checks pass:
+    - [ ] Schema analyzed ✓
+    - [ ] Relationships analyzed ✓  
+    - [ ] Fan-trap patterns checked ✓
+    - [ ] Syntax validated ✓
+    - [ ] Safe aggregation pattern used ✓
+    - [ ] Results make business sense ✓
+
+    ## Function Parameters
+
+    ### Required Parameters
+    - **sql_query** (string): SQL query to execute (must be SELECT, WITH, EXPLAIN, etc.)
+
+    ### Optional Parameters  
+    - **limit** (integer): Maximum number of rows to return (default: 1000, max: 5000)
+
+    ### Returns
+    Dictionary containing:
+    - **success** (boolean): Whether query executed successfully
+    - **data** (array): Query results as array of objects
+    - **columns** (array): Column names in result set
+    - **row_count** (integer): Number of rows returned
+    - **execution_time_ms** (float): Query execution time
+    - **error** (string): Error message if query failed
+    - **warnings** (array): Performance and complexity warnings
+    - **limit_applied** (boolean): Whether result limit was applied
+
+    ## Security Restrictions
+
+    **ALLOWED:**
+    - SELECT statements
+    - Common Table Expressions (WITH)
+    - EXPLAIN statements
+    - Database metadata queries
+
+    **PROHIBITED:**
+    - INSERT, UPDATE, DELETE statements
+    - DDL operations (CREATE, DROP, ALTER)
+    - Transaction control (COMMIT, ROLLBACK)
+    - System functions that modify state
+    - Dynamic SQL execution
+
+    ## Performance Guidelines
+
+    **Query Optimization:**
+    - Use appropriate indexes via schema analysis
+    - Limit result sets with WHERE clauses
+    - Use EXPLAIN to understand query plans
+    - Monitor execution time warnings
+
+    **Resource Management:**
+    - Default limit: 1000 rows
+    - Maximum limit: 5000 rows  
+    - Automatic timeout protection
+    - Memory usage monitoring
+
+    ## Error Handling
+
+    **Common Error Types:**
+    - **Syntax errors**: Use `validate_sql_syntax()` first
+    - **Permission errors**: Check allowed query types
+    - **Timeout errors**: Simplify complex queries
+    - **Memory errors**: Reduce result set size
+
+    **Best Practices:**
+    - Always validate syntax before execution
+    - Start with small result sets
+    - Use LIMIT clauses appropriately
+    - Monitor execution time and warnings
+
+    ## Examples
+
+    ### Multi-Fact Query (Recommended)
+    ```sql
+    WITH unified_facts AS (
+        SELECT customer_id, product_id, sales_amount, 0 as returns, 'SALES' as type
+        FROM sales
+        UNION ALL
+        SELECT customer_id, product_id, 0, return_amount, 'RETURNS' as type  
+        FROM returns r JOIN sales s ON r.sales_id = s.id
+    )
+    SELECT customer_id, SUM(sales_amount) as net_sales, SUM(returns) as total_returns
+    FROM unified_facts GROUP BY customer_id;
+    ```
+
+    ### Safe Aggregation Query
+    ```sql
+    WITH customer_sales AS (
+        SELECT customer_id, SUM(amount) as total_sales
+        FROM sales GROUP BY customer_id
+    )
+    SELECT c.name, cs.total_sales
+    FROM customers c
+    LEFT JOIN customer_sales cs ON c.id = cs.customer_id
+    ORDER BY cs.total_sales DESC;
+    ```
+
     Args:
         sql_query: SQL query to execute (must be SELECT, WITH, EXPLAIN, etc.)
         limit: Maximum number of rows to return (default: 1000, max: 5000)
