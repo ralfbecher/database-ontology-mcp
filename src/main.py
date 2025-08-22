@@ -178,21 +178,47 @@ def error_handler(operation_name: str):
 
 # --- MCP Prompts ---
 
-@mcp.prompt()
-def ontology_enrichment_guide() -> str:
-    """Provides guidance for enriching database ontologies with meaningful names and descriptions."""
-    return """You are an expert in ontology engineering and database schema analysis. 
+@mcp.tool()
+def get_ontology_enrichment_guide() -> str:
+    """Get comprehensive guidance for enriching database ontologies with meaningful names and descriptions.
+    
+    This tool provides expert guidance on ontology engineering and database schema analysis
+    to help create semantically rich ontologies from database schemas.
+    
+    Returns:
+        Complete guide for ontology enrichment with examples and best practices
+    """
+    return """# Ontology Enrichment Guide for Database Schemas
 
-Your task is to analyze database schema information and provide enrichment suggestions to make the ontology more meaningful and semantically rich.
+## Overview
+You are analyzing database schema information to provide enrichment suggestions that make ontologies more meaningful and semantically rich for SQL generation.
 
-When analyzing database schemas, consider:
+## Analysis Framework
 
-1. **Business Domain Context**: Look at table and column names to understand the business domain
-2. **Data Relationships**: Analyze foreign key relationships to understand entity connections  
-3. **Data Types and Constraints**: Use column types, nullability, and keys to infer semantic meaning
-4. **Sample Data**: Examine actual data values to better understand the purpose of each field
+### 1. **Business Domain Context**
+- Look at table and column names to understand the business domain
+- Identify common business patterns (customers, orders, products, etc.)
+- Consider industry-specific terminology and conventions
 
-For ontology enrichment, provide suggestions in this exact JSON format:
+### 2. **Data Relationships** 
+- Analyze foreign key relationships to understand entity connections
+- Map out cardinality patterns (one-to-many, many-to-many)
+- Identify hierarchical or categorical relationships
+
+### 3. **Data Types and Constraints**
+- Use column types, nullability, and keys to infer semantic meaning
+- Primary keys indicate entity identifiers
+- Foreign keys show relationships
+- Data types suggest usage patterns
+
+### 4. **Sample Data Analysis**
+- Examine actual data values to better understand field purposes
+- Look for patterns, formats, and value ranges
+- Identify categorical vs. continuous data
+
+## Expected Output Format
+
+Provide enrichment suggestions in this exact JSON format:
 
 ```json
 {
@@ -222,43 +248,60 @@ For ontology enrichment, provide suggestions in this exact JSON format:
 }
 ```
 
-**Naming Guidelines:**
-- Class names: PascalCase (e.g., CustomerOrder, ProductCategory)
-- Property names: camelCase (e.g., firstName, createdDateTime)
-- Relationship names: camelCase (e.g., belongsToCustomer, hasOrderItems)
-- Use domain-specific terminology when appropriate
-- Avoid abbreviations unless they're standard in the domain
+## Naming Guidelines
 
-**Description Guidelines:**
+### Class Names (PascalCase)
+- CustomerOrder, ProductCategory, UserAccount
+- Use domain-specific terminology
+- Avoid abbreviations unless standard
+
+### Property Names (camelCase)
+- firstName, createdDateTime, orderAmount
+- Be descriptive and specific
+- Follow common naming patterns
+
+### Relationship Names (camelCase)
+- belongsToCustomer, hasOrderItems, referencesProduct
+- Express the semantic relationship
+- Use verbs that make business sense
+
+## Description Guidelines
+
+### For Classes (Tables)
 - Be specific about the business purpose
-- Explain constraints and business rules when evident
+- Explain what type of data is stored
+- Mention primary use cases
+
+### For Properties (Columns)  
+- Describe what the field represents
+- Explain constraints and business rules
+- Note format or value expectations
+
+### For Relationships
+- Explain the business meaning of the connection
 - Mention cardinality and optionality implications
-- Reference related entities to provide context"""
+- Reference related business processes
 
-@mcp.prompt()
-def ontology_analysis_prompt(schema_data: Dict[str, Any]) -> str:
-    """Analyzes database schema data to provide ontology enrichment suggestions."""
-    return f"""Please analyze the following database schema and provide ontology enrichment suggestions.
+## Best Practices
 
-**Database Schema Information:**
-{json.dumps(schema_data.get('schema_data', []), indent=2, default=str)}
+1. **Domain Expertise**: Use terminology that domain experts would understand
+2. **Consistency**: Maintain consistent naming patterns across the schema
+3. **Clarity**: Prioritize clear, unambiguous descriptions
+4. **Business Focus**: Frame descriptions in business terms, not technical jargon
+5. **Completeness**: Cover all important tables, columns, and relationships
 
-**Instructions:**
-{schema_data.get('instructions', {}).get('task', 'Analyze and enrich the ontology')}
+This guidance helps create ontologies that serve as effective bridges between business language and technical database structure."""
 
-**Expected Response Format:**
-The response must be a valid JSON object with exactly these three keys: "classes", "properties", and "relationships". Each should contain arrays of suggestion objects as shown in the example format.
-
-**Guidelines:**
-{chr(10).join('- ' + guideline for guideline in schema_data.get('instructions', {}).get('guidelines', []))}
-
-Analyze the schema carefully, considering table names, column types, relationships, and any sample data provided. Focus on the most important and commonly-used entities first.
-
-Provide meaningful, business-oriented names and descriptions that would make sense to domain experts."""
-
-@mcp.prompt()
-def analysis_workflow_guide() -> str:
-    """Provides guidance for effective database analysis sessions using the ontology-enhanced workflow."""
+@mcp.tool()
+def get_analysis_workflow_guide() -> str:
+    """Get comprehensive guidance for effective database analysis sessions using the ontology-enhanced workflow.
+    
+    This tool provides step-by-step instructions for conducting database analysis sessions
+    that leverage the ontology generation capabilities for better SQL generation from business language.
+    
+    Returns:
+        Complete workflow guide with examples and best practices for analysis sessions
+    """
     return """# Database Analysis Workflow with Ontology Integration
 
 You are working with an advanced database ontology MCP server that generates comprehensive semantic mappings of database schemas. Here's how to conduct effective analysis sessions:
@@ -328,9 +371,23 @@ Always:
 
 The ontology acts as your "smart schema documentation" that bridges the gap between business language and technical database structure."""
 
-@mcp.prompt()
-def sql_generation_context_prompt(enriched_context: Dict[str, Any]) -> str:
-    """Provides enriched database context for improved SQL generation from business language."""
+@mcp.tool()
+def get_sql_generation_context(enriched_context_json: str) -> str:
+    """Generate formatted SQL generation context from enriched schema data.
+    
+    This tool takes enriched schema context (from get_enriched_schema_context or get_analysis_context)
+    and formats it into a comprehensive guide for SQL generation from business language.
+    
+    Args:
+        enriched_context_json: JSON string containing enriched schema context data
+        
+    Returns:
+        Formatted SQL generation context with business meanings and technical details
+    """
+    try:
+        enriched_context = json.loads(enriched_context_json) if isinstance(enriched_context_json, str) else enriched_context_json
+    except (json.JSONDecodeError, TypeError):
+        return "Error: Invalid JSON format in enriched_context_json parameter"
     
     schema_info = enriched_context.get('schema_info', {})
     semantic_mappings = enriched_context.get('semantic_mappings', {})
@@ -1664,6 +1721,118 @@ def get_analysis_context(
         )
 
 @mcp.tool()
+def get_sql_context_from_ontology(ontology_ttl: str) -> str:
+    """Extract SQL generation context directly from an ontology in Turtle format.
+    
+    This tool parses an ontology (from generate_ontology) and extracts the database-specific
+    annotations to create a practical SQL generation reference.
+    
+    Args:
+        ontology_ttl: Ontology in Turtle format containing database annotations
+        
+    Returns:
+        Formatted SQL context with table references, JOIN conditions, and business descriptions
+    """
+    try:
+        # Parse the ontology to extract key information
+        lines = ontology_ttl.split('\n')
+        tables = {}
+        relationships = []
+        
+        current_entity = None
+        current_type = None
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Look for class definitions
+            if 'a owl:Class' in line:
+                parts = line.split()
+                if len(parts) > 0:
+                    current_entity = parts[0].replace('ns:', '')
+                    current_type = 'class'
+                    if current_entity not in tables:
+                        tables[current_entity] = {'type': 'table', 'properties': [], 'description': ''}
+            
+            # Look for property definitions  
+            elif 'a owl:DatatypeProperty' in line or 'a owl:ObjectProperty' in line:
+                parts = line.split()
+                if len(parts) > 0:
+                    current_entity = parts[0].replace('ns:', '')
+                    current_type = 'property'
+            
+            # Extract useful annotations
+            elif 'db:tableName' in line and current_type == 'class':
+                table_name = line.split('"')[1] if '"' in line else ''
+                if current_entity in tables:
+                    tables[current_entity]['table_name'] = table_name
+            
+            elif 'db:businessDescription' in line:
+                description = line.split('"')[1] if '"' in line else ''
+                if current_entity in tables:
+                    tables[current_entity]['description'] = description
+            
+            elif 'db:sqlReference' in line:
+                sql_ref = line.split('"')[1] if '"' in line else ''
+                if current_entity and sql_ref:
+                    tables.setdefault(current_entity, {}).setdefault('properties', []).append({
+                        'sql_reference': sql_ref,
+                        'property_name': current_entity
+                    })
+            
+            elif 'db:sqlJoinCondition' in line:
+                join_condition = line.split('"')[1] if '"' in line else ''
+                if join_condition:
+                    relationships.append({
+                        'join_condition': join_condition,
+                        'relationship': current_entity
+                    })
+        
+        # Format the context
+        context_parts = []
+        context_parts.append("# SQL Generation Context from Ontology")
+        context_parts.append("")
+        context_parts.append("This context is extracted directly from the database ontology and contains")
+        context_parts.append("ready-to-use SQL references for generating queries from business language.")
+        context_parts.append("")
+        
+        # Add table information
+        context_parts.append("## Database Tables and Business Context")
+        context_parts.append("")
+        
+        for table_key, table_info in tables.items():
+            if table_info.get('table_name'):
+                context_parts.append(f"### {table_info['table_name']}")
+                context_parts.append(f"- **Business Purpose**: {table_info.get('description', 'Data table')}")
+                context_parts.append(f"- **SQL Reference**: `{table_info['table_name']}`")
+                
+                if table_info.get('properties'):
+                    context_parts.append("- **Available Columns**:")
+                    for prop in table_info['properties']:
+                        context_parts.append(f"  - `{prop['sql_reference']}`")
+                context_parts.append("")
+        
+        # Add relationship information
+        if relationships:
+            context_parts.append("## Ready-to-Use JOIN Conditions")
+            context_parts.append("")
+            for rel in relationships:
+                context_parts.append(f"- `{rel['join_condition']}`")
+            context_parts.append("")
+        
+        context_parts.append("## Usage Instructions")
+        context_parts.append("")
+        context_parts.append("1. **For Column References**: Use the SQL references directly (e.g., `customers.customer_id`)")
+        context_parts.append("2. **For JOINs**: Use the provided JOIN conditions exactly as shown")
+        context_parts.append("3. **For Business Context**: Reference the business purposes to understand data meaning")
+        context_parts.append("4. **For Query Building**: Combine the SQL references with the business context")
+        
+        return '\n'.join(context_parts)
+        
+    except Exception as e:
+        return f"Error parsing ontology: {str(e)}"
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
     
@@ -1692,9 +1861,9 @@ def get_server_info() -> Dict[str, Any]:
         "tools": [
             "connect_database",
             "list_schemas", 
-            "get_analysis_context",      # 🚀 RECOMMENDED: Complete analysis starting point
+            "get_analysis_context",           # 🚀 RECOMMENDED: Complete analysis starting point
             "analyze_schema",
-            "generate_ontology",         # 🎯 Contains direct SQL references and business context
+            "generate_ontology",              # 🎯 Contains direct SQL references and business context
             "sample_table_data",
             "get_table_relationships",
             "get_enrichment_data",
@@ -1702,6 +1871,10 @@ def get_server_info() -> Dict[str, Any]:
             "validate_sql_syntax",
             "execute_sql_query",
             "get_enriched_schema_context",
+            "get_analysis_workflow_guide",    # 📚 Step-by-step analysis workflow guidance
+            "get_ontology_enrichment_guide",  # 📖 Ontology enrichment best practices
+            "get_sql_context_from_ontology",  # 🔧 Extract SQL context from ontology
+            "get_sql_generation_context",     # 📝 Format enriched context for SQL generation
             "get_server_info"
         ],
         "configuration": {
