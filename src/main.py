@@ -257,6 +257,78 @@ Analyze the schema carefully, considering table names, column types, relationshi
 Provide meaningful, business-oriented names and descriptions that would make sense to domain experts."""
 
 @mcp.prompt()
+def analysis_workflow_guide() -> str:
+    """Provides guidance for effective database analysis sessions using the ontology-enhanced workflow."""
+    return """# Database Analysis Workflow with Ontology Integration
+
+You are working with an advanced database ontology MCP server that generates comprehensive semantic mappings of database schemas. Here's how to conduct effective analysis sessions:
+
+## 🚀 **RECOMMENDED ANALYSIS WORKFLOW:**
+
+### 1. **Start with Complete Context**
+```
+Use: get_analysis_context()
+```
+This single tool provides:
+- Complete schema structure (tables, columns, relationships)
+- **Self-sufficient ontology** with direct SQL references
+- Business-friendly descriptions and semantic mappings
+- Relationship warnings and SQL generation hints
+
+### 2. **Leverage the Ontology for SQL Generation**
+The generated ontology contains **everything needed for SQL**:
+- ✅ Direct column references: `customers.customer_id`
+- ✅ Ready-to-use JOIN conditions: `orders.customer_id = customers.customer_id` 
+- ✅ Business context: "Customer information and profile data"
+- ✅ Data types and constraints: `INTEGER NOT NULL PRIMARY KEY`
+- ✅ Relationship types: `many_to_one`, `one_to_many`
+
+### 3. **Use Ontology Properties for Query Building**
+```turtle
+# Example from ontology:
+ns:customers_customer_id a owl:DatatypeProperty ;
+    db:sqlReference "customers.customer_id" ;
+    db:businessDescription "Unique identifier for customer" ;
+    db:sqlDataType "INTEGER" ;
+    db:isPrimaryKey true .
+
+ns:orders_has_customers a owl:ObjectProperty ;
+    db:sqlJoinCondition "orders.customer_id = customers.customer_id" ;
+    db:relationshipType "many_to_one" .
+```
+
+**Translation to SQL:**
+- Business request: "Show customer names with their order totals"
+- Ontology reference: `customers.customer_name`, `orders.order_total`
+- JOIN condition: `orders.customer_id = customers.customer_id`
+
+### 4. **Follow Safe SQL Generation**
+Always:
+- Check relationship warnings for fan-traps
+- Validate syntax with `validate_sql_syntax` 
+- Use the provided JOIN conditions from the ontology
+- Execute with `execute_sql_query`
+
+## 🎯 **WHY THE ONTOLOGY IS ESSENTIAL:**
+
+1. **Self-Sufficient**: Contains ALL database references and business context
+2. **SQL-Ready**: Provides exact column references and JOIN conditions
+3. **Business Context**: Explains what each table and column represents
+4. **Relationship Intelligence**: Warns about fan-traps and aggregation risks
+5. **Complete Metadata**: Data types, constraints, row counts
+
+## 📋 **ANALYSIS SESSION CHECKLIST:**
+
+- [ ] Used `get_analysis_context()` to get complete schema + ontology
+- [ ] Reviewed ontology for business understanding of tables/columns
+- [ ] Used ontology SQL references for accurate column names
+- [ ] Applied ontology JOIN conditions for relationships
+- [ ] Checked for fan-trap warnings before multi-table aggregations
+- [ ] Validated SQL syntax before execution
+
+The ontology acts as your "smart schema documentation" that bridges the gap between business language and technical database structure."""
+
+@mcp.prompt()
 def sql_generation_context_prompt(enriched_context: Dict[str, Any]) -> str:
     """Provides enriched database context for improved SQL generation from business language."""
     
@@ -575,7 +647,24 @@ def generate_ontology(
     base_uri: Optional[str] = None,
     enrich_llm: bool = False
 ) -> str:
-    """Generate an RDF ontology from the database schema.
+    """Generate a comprehensive database ontology with direct SQL generation support.
+    
+    🎯 **WHY USE THIS DURING ANALYSIS:**
+    This ontology contains EVERYTHING needed for SQL generation:
+    - Direct database table/column references (customers.customer_id)
+    - Ready-to-use JOIN conditions (orders.customer_id = customers.customer_id)
+    - Business-friendly descriptions for understanding data meaning
+    - Complete metadata (data types, constraints, row counts)
+    - Relationship types and SQL generation hints
+    
+    **ANALYTICAL WORKFLOW INTEGRATION:**
+    Use this tool immediately after `analyze_schema` to get a complete semantic
+    understanding of your database that serves as both documentation and a 
+    practical SQL generation reference.
+    
+    The ontology acts as a "smart schema" that combines technical database
+    structure with business meaning, making it much easier to write accurate
+    SQL queries from natural language requests.
     
     Args:
         schema_name: Name of the schema to generate ontology from (optional)
@@ -583,7 +672,7 @@ def generate_ontology(
         enrich_llm: Whether to enrich the ontology with LLM insights (default: False)
     
     Returns:
-        RDF ontology in Turtle format or error response
+        Self-sufficient RDF ontology in Turtle format with complete database mappings
     """
     try:
         db_manager = get_db_manager()
@@ -959,8 +1048,8 @@ def execute_sql_query(
 
     1. **Connect to Database**: Use `connect_database()` to establish connection
     2. **Analyze Schema**: Use `analyze_schema()` to understand table structure
-    3. **Check Relationships**: Use `get_table_relationships()` to identify potential fan-traps
-    4. **Generate Ontology** (optional): Use `generate_ontology()` for complex schemas
+    3. **Generate Ontology** (RECOMMENDED): Use `generate_ontology()` to get business context and SQL references
+    4. **Check Relationships**: Use `get_table_relationships()` to identify potential fan-traps
     5. **Validate Syntax**: Use `validate_sql_syntax()` before execution
 
     ## 🚨 CRITICAL SQL TRAP PREVENTION PROTOCOL 🚨
@@ -1464,6 +1553,117 @@ def get_enriched_schema_context(
         )
 
 @mcp.tool()
+def get_analysis_context(
+    schema_name: Optional[str] = None,
+    include_ontology: bool = True
+) -> Union[Dict[str, Any], str]:
+    """Get comprehensive analysis context for data exploration and SQL generation.
+    
+    🚀 **RECOMMENDED STARTING POINT FOR ANALYSIS SESSIONS**
+    
+    This tool combines schema analysis with ontology generation to provide
+    everything needed for effective database analysis and SQL generation.
+    
+    **What you get:**
+    - Complete schema structure (tables, columns, relationships)
+    - Business-friendly ontology with SQL generation hints
+    - Ready-to-use JOIN conditions and column references  
+    - Relationship warnings for safe aggregations
+    - Row counts and data type information
+    
+    **Use this instead of calling analyze_schema and generate_ontology separately.**
+    
+    Args:
+        schema_name: Name of the schema to analyze (optional)
+        include_ontology: Whether to generate the ontology (default: True, recommended)
+    
+    Returns:
+        Dictionary containing complete analysis context with schema and ontology data
+    """
+    try:
+        db_manager = get_db_manager()
+        
+        # Check connection
+        if not db_manager.has_engine():
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
+        
+        logger.info(f"Generating complete analysis context for schema: {schema_name or 'default'}")
+        
+        # Get schema analysis
+        schema_data = analyze_schema(schema_name)
+        if isinstance(schema_data, str):  # Error occurred
+            return schema_data
+        
+        # Get relationships
+        relationships = get_table_relationships(schema_name)
+        if isinstance(relationships, str):  # Error occurred
+            relationships = {}
+            
+        result = {
+            "schema_analysis": schema_data,
+            "relationships": relationships,
+            "ontology": None,
+            "sql_hints": {
+                "workflow": [
+                    "1. Review the schema_analysis to understand table structure",
+                    "2. Use the ontology for business context and SQL references",
+                    "3. Check relationships for potential fan-traps before JOINs",
+                    "4. Validate SQL syntax before execution",
+                    "5. Execute queries with appropriate limits"
+                ]
+            }
+        }
+        
+        # Generate ontology if requested
+        if include_ontology:
+            try:
+                ontology_ttl = generate_ontology(schema_name, enrich_llm=False)
+                if not isinstance(ontology_ttl, str) or "error" not in ontology_ttl.lower():
+                    result["ontology"] = ontology_ttl
+                    result["sql_hints"]["ontology_benefits"] = [
+                        "Contains ready-to-use SQL column references (e.g., customers.customer_id)",
+                        "Includes complete JOIN conditions for relationships", 
+                        "Provides business descriptions for understanding data meaning",
+                        "Shows data types, constraints, and row counts",
+                        "Acts as both documentation and SQL generation reference"
+                    ]
+                else:
+                    logger.warning("Failed to generate ontology for analysis context")
+            except Exception as e:
+                logger.warning(f"Could not generate ontology for analysis context: {e}")
+        
+        # Add relationship warnings for analysis
+        fan_trap_warnings = []
+        for table, fks in relationships.items():
+            if len(fks) > 1:
+                referenced_tables = [fk['referenced_table'] for fk in fks]
+                fan_trap_warnings.append({
+                    "table": table,
+                    "warning": f"Table {table} connects to multiple tables - potential fan-trap risk",
+                    "referenced_tables": referenced_tables,
+                    "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations"
+                })
+        
+        if fan_trap_warnings:
+            result["sql_hints"]["fan_trap_warnings"] = fan_trap_warnings
+            
+        logger.info(f"Generated analysis context: {len(schema_data.get('tables', []))} tables, "
+                   f"ontology: {result['ontology'] is not None}")
+                   
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error generating analysis context: {e}")
+        return create_error_response(
+            f"Failed to generate analysis context: {str(e)}",
+            "internal_error"
+        )
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
     
@@ -1492,8 +1692,9 @@ def get_server_info() -> Dict[str, Any]:
         "tools": [
             "connect_database",
             "list_schemas", 
+            "get_analysis_context",      # 🚀 RECOMMENDED: Complete analysis starting point
             "analyze_schema",
-            "generate_ontology",
+            "generate_ontology",         # 🎯 Contains direct SQL references and business context
             "sample_table_data",
             "get_table_relationships",
             "get_enrichment_data",
