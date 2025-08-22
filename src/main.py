@@ -256,6 +256,116 @@ Analyze the schema carefully, considering table names, column types, relationshi
 
 Provide meaningful, business-oriented names and descriptions that would make sense to domain experts."""
 
+@mcp.prompt()
+def sql_generation_context_prompt(enriched_context: Dict[str, Any]) -> str:
+    """Provides enriched database context for improved SQL generation from business language."""
+    
+    schema_info = enriched_context.get('schema_info', {})
+    semantic_mappings = enriched_context.get('semantic_mappings', {})
+    sql_hints = enriched_context.get('sql_generation_hints', {})
+    relationships = enriched_context.get('relationships', {})
+    
+    # Create a comprehensive context for SQL generation
+    context_parts = []
+    
+    context_parts.append("# Database Schema Context for SQL Generation")
+    context_parts.append("")
+    context_parts.append("You are helping generate SQL queries from business language using this database schema.")
+    context_parts.append("This context combines technical schema information with semantic business meanings.")
+    context_parts.append("")
+    
+    # Add schema overview
+    context_parts.append("## Schema Overview")
+    context_parts.append(f"- Database Schema: {enriched_context.get('metadata', {}).get('schema_name', 'default')}")
+    context_parts.append(f"- Total Tables: {enriched_context.get('metadata', {}).get('table_count', 0)}")
+    context_parts.append("")
+    
+    # Add table information with semantic mappings
+    context_parts.append("## Tables and Business Meanings")
+    context_parts.append("")
+    
+    for table in schema_info.get('tables', []):
+        table_name = table['name']
+        semantic_info = semantic_mappings.get(table_name, {})
+        
+        context_parts.append(f"### {table_name}")
+        context_parts.append(f"- **Business Name**: {semantic_info.get('business_name', table_name.replace('_', ' ').title())}")
+        default_desc = f"Represents {table_name.replace('_', ' ').lower()} data"
+        context_parts.append(f"- **Description**: {semantic_info.get('description', default_desc)}")
+        context_parts.append(f"- **Row Count**: {table.get('row_count', 'Unknown')}")
+        
+        # Add column information
+        context_parts.append("- **Columns**:")
+        for col in table.get('columns', []):
+            col_name = col['name']
+            col_semantic = semantic_info.get('columns', {}).get(col_name, {})
+            
+            col_desc = col_semantic.get('description', col_name.replace('_', ' ').title())
+            key_info = ""
+            if col.get('is_primary_key'):
+                key_info = " (PRIMARY KEY)"
+            elif col.get('is_foreign_key'):
+                key_info = f" (FOREIGN KEY → {col.get('foreign_key_table', '')}.{col.get('foreign_key_column', '')})"
+            
+            context_parts.append(f"  - `{col_name}` ({col['data_type']}){key_info}: {col_desc}")
+        
+        context_parts.append("")
+    
+    # Add relationship information
+    if relationships:
+        context_parts.append("## Table Relationships")
+        context_parts.append("")
+        for table, fks in relationships.items():
+            if fks:
+                context_parts.append(f"**{table}** connects to:")
+                for fk in fks:
+                    context_parts.append(f"- {fk['referenced_table']} via {table}.{fk['column']} = {fk['referenced_table']}.{fk['referenced_column']}")
+                context_parts.append("")
+    
+    # Add SQL generation warnings and hints
+    if sql_hints.get('relationship_warnings'):
+        context_parts.append("## ⚠️ SQL Generation Warnings")
+        context_parts.append("")
+        for warning in sql_hints['relationship_warnings']:
+            context_parts.append(f"- **{warning['table']}**: {warning['warning']}")
+            context_parts.append(f"  - Referenced tables: {', '.join(warning['referenced_tables'])}")
+            context_parts.append(f"  - **Recommendation**: {warning['recommendation']}")
+            context_parts.append("")
+    
+    # Add join recommendations
+    if sql_hints.get('join_recommendations'):
+        context_parts.append("## SQL Join Patterns")
+        context_parts.append("")
+        context_parts.append("**Safe Join Conditions:**")
+        for join in sql_hints['join_recommendations']:
+            context_parts.append(f"- {join['from_table']} → {join['to_table']}: `{join['join_condition']}`")
+        context_parts.append("")
+    
+    # Add SQL best practices based on the schema
+    context_parts.append("## SQL Generation Best Practices for This Schema")
+    context_parts.append("")
+    context_parts.append("1. **Always validate syntax** using `validate_sql_syntax` before executing")
+    context_parts.append("2. **Check for fan-traps** when joining multiple tables with aggregations")
+    context_parts.append("3. **Use table aliases** for readability: `customers c`, `orders o`")
+    context_parts.append("4. **Prefer explicit JOIN syntax** over comma-separated tables")
+    context_parts.append("5. **Use LIMIT clauses** for exploratory queries")
+    context_parts.append("")
+    
+    if sql_hints.get('relationship_warnings'):
+        context_parts.append("6. **For multi-fact queries**: Use UNION approach or separate CTEs to avoid data multiplication")
+        context_parts.append("7. **When aggregating**: Ensure you're not accidentally multiplying facts through joins")
+        context_parts.append("")
+    
+    context_parts.append("## Next Steps")
+    context_parts.append("")
+    context_parts.append("1. Use this context to understand business intent behind user queries")
+    context_parts.append("2. Translate business terms to appropriate table/column names")
+    context_parts.append("3. Apply relationship knowledge for accurate joins")
+    context_parts.append("4. Validate SQL syntax before execution")
+    context_parts.append("5. Execute queries safely with appropriate limits")
+    
+    return '\n'.join(context_parts)
+
 # --- Enhanced MCP Tools with Better Validation ---
 
 @mcp.tool()
@@ -1195,6 +1305,165 @@ def execute_sql_query(
 
 
 @mcp.tool()
+def get_enriched_schema_context(
+    schema_name: Optional[str] = None,
+    include_sample_data: bool = True,
+    include_ontology: bool = True
+) -> Union[Dict[str, Any], str]:
+    """Get comprehensive schema context combining database metadata with ontology semantics.
+    
+    This tool provides a unified view of the database schema that combines:
+    - Raw schema information (tables, columns, relationships)
+    - Semantic ontology mappings (classes, properties, relationships)
+    - Sample data for context
+    - Business-friendly descriptions and naming suggestions
+    
+    This enriched context is designed to help Claude Desktop generate better SQL
+    by understanding both the technical structure and semantic meaning of the data.
+    
+    Args:
+        schema_name: Name of the schema to analyze (optional)
+        include_sample_data: Whether to include sample data for context (default: True)
+        include_ontology: Whether to include ontology mappings (default: True)
+    
+    Returns:
+        Dictionary containing enriched schema context with semantic mappings
+    """
+    try:
+        db_manager = get_db_manager()
+        
+        # Check connection
+        if not db_manager.has_engine():
+            return create_error_response(
+                "No database connection established",
+                "connection_error",
+                "Use connect_database tool first"
+            )
+        
+        logger.info(f"Generating enriched schema context for schema: {schema_name or 'default'}")
+        
+        # Step 1: Get raw schema information
+        schema_data = analyze_schema(schema_name)
+        if isinstance(schema_data, str):  # Error occurred
+            return schema_data
+            
+        # Step 2: Get relationships for SQL generation context
+        relationships = get_table_relationships(schema_name)
+        if isinstance(relationships, str):  # Error occurred
+            relationships = {}
+            
+        # Step 3: Generate ontology if requested
+        ontology_ttl = None
+        semantic_mappings = {}
+        
+        if include_ontology:
+            try:
+                # Get enrichment data for semantic understanding
+                enrichment_data = get_enrichment_data(schema_name)
+                if isinstance(enrichment_data, dict):
+                    # Generate ontology with semantic mappings
+                    ontology_ttl = generate_ontology(schema_name, enrich_llm=False)
+                    
+                    # Create semantic mappings for easier access
+                    for table_data in enrichment_data.get('schema_data', []):
+                        table_name = table_data['table_name']
+                        default_table_desc = f"Represents {table_name.replace('_', ' ').lower()} data"
+                        semantic_mappings[table_name] = {
+                            'business_name': table_name.replace('_', ' ').title(),
+                            'description': default_table_desc,
+                            'columns': {}
+                        }
+                        
+                        # Map column semantics
+                        for col in table_data.get('columns', []):
+                            col_name = col['name']
+                            col_info = {
+                                'business_name': col_name.replace('_', ' ').title(),
+                                'data_type': col['data_type'],
+                                'is_key': col.get('is_primary_key', False) or col.get('is_foreign_key', False),
+                                'description': f"{col_name.replace('_', ' ').title()}"
+                            }
+                            
+                            # Add more context based on column patterns
+                            col_lower = col_name.lower()
+                            if 'id' in col_lower:
+                                col_info['description'] = f"Unique identifier for {col_name.replace('_id', '').replace('_', ' ')}"
+                            elif 'name' in col_lower:
+                                col_info['description'] = f"Name or title"
+                            elif 'date' in col_lower or 'time' in col_lower:
+                                col_info['description'] = f"Date/time information"
+                            elif 'amount' in col_lower or 'price' in col_lower or 'cost' in col_lower:
+                                col_info['description'] = f"Monetary or quantity value"
+                            elif 'count' in col_lower or 'quantity' in col_lower:
+                                col_info['description'] = f"Numeric count or quantity"
+                            elif 'status' in col_lower or 'state' in col_lower:
+                                col_info['description'] = f"Status or state indicator"
+                                
+                            semantic_mappings[table_name]['columns'][col_name] = col_info
+                            
+            except Exception as e:
+                logger.warning(f"Failed to generate ontology context: {e}")
+                
+        # Step 4: Add SQL generation hints
+        sql_hints = {
+            'relationship_warnings': [],
+            'join_recommendations': [],
+            'aggregation_safe_patterns': []
+        }
+        
+        # Analyze relationships for potential fan-traps
+        for table, fks in relationships.items():
+            if len(fks) > 1:
+                referenced_tables = [fk['referenced_table'] for fk in fks]
+                sql_hints['relationship_warnings'].append({
+                    'table': table,
+                    'warning': f"Table {table} has multiple foreign keys - potential fan-trap risk",
+                    'referenced_tables': referenced_tables,
+                    'recommendation': "Use separate CTEs or UNION approach for multi-fact queries"
+                })
+                
+        # Add join recommendations based on relationships
+        for table, fks in relationships.items():
+            for fk in fks:
+                sql_hints['join_recommendations'].append({
+                    'from_table': table,
+                    'to_table': fk['referenced_table'],
+                    'join_condition': f"{table}.{fk['column']} = {fk['referenced_table']}.{fk['referenced_column']}",
+                    'relationship_type': "many_to_one"
+                })
+                
+        # Step 5: Compile enriched context
+        enriched_context = {
+            'schema_info': schema_data,
+            'relationships': relationships,
+            'semantic_mappings': semantic_mappings,
+            'sql_generation_hints': sql_hints,
+            'metadata': {
+                'schema_name': schema_name or 'default',
+                'table_count': len(schema_data.get('tables', [])),
+                'has_ontology': ontology_ttl is not None,
+                'has_sample_data': include_sample_data,
+                'generation_timestamp': None  # Could add timestamp if needed
+            }
+        }
+        
+        # Optionally include ontology
+        if ontology_ttl:
+            enriched_context['ontology_ttl'] = ontology_ttl
+            
+        logger.info(f"Generated enriched schema context: {len(schema_data.get('tables', []))} tables, "
+                   f"{len(relationships)} relationships, ontology: {ontology_ttl is not None}")
+                   
+        return enriched_context
+        
+    except Exception as e:
+        logger.error(f"Error generating enriched schema context: {e}")
+        return create_error_response(
+            f"Failed to generate enriched schema context: {str(e)}",
+            "internal_error"
+        )
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
     
@@ -1217,7 +1486,8 @@ def get_server_info() -> Dict[str, Any]:
             "LLM-enhanced ontology enrichment",
             "Database-level SQL syntax validation for text-to-SQL",
             "Safe SQL query execution with automatic limits",
-            "Comprehensive configuration management"
+            "Comprehensive configuration management",
+            "Enriched schema context combining metadata with ontology semantics"
         ],
         "tools": [
             "connect_database",
@@ -1230,6 +1500,7 @@ def get_server_info() -> Dict[str, Any]:
             "apply_ontology_enrichment",
             "validate_sql_syntax",
             "execute_sql_query",
+            "get_enriched_schema_context",
             "get_server_info"
         ],
         "configuration": {
