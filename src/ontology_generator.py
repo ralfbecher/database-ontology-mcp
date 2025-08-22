@@ -15,12 +15,17 @@ from .database_manager import TableInfo, ColumnInfo
 logger = logging.getLogger(__name__)
 
 class OntologyGenerator:
-    """Generates an ontology from a database schema."""
+    """Generates an ontology from a database schema with comprehensive database annotations."""
 
     def __init__(self, base_uri: str = DEFAULT_BASE_URI):
         self.graph = Graph()
         self.base_uri = Namespace(base_uri)
+        
+        # Define custom namespace for database-specific annotations
+        self.db_ns = Namespace(f"{base_uri}db/")
+        
         self.graph.bind("ns", self.base_uri)
+        self.graph.bind("db", self.db_ns)
         self.graph.bind("rdf", RDF)
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("owl", OWL)
@@ -40,15 +45,33 @@ class OntologyGenerator:
         return self.graph.serialize(format="turtle")
 
     def _add_table_to_ontology(self, table_info: TableInfo):
-        """Add a single table and its columns to the ontology."""
+        """Add a single table and its columns to the ontology with comprehensive database annotations."""
         # Create proper URI for table class
         table_uri = self.base_uri[self._clean_name(table_info.name)]
 
         # Define table as a class
         self.graph.add((table_uri, RDF.type, OWL.Class))
         self.graph.add((table_uri, RDFS.label, Literal(table_info.name)))
+        
+        # Add comprehensive database-specific annotations
+        self.graph.add((table_uri, self.db_ns.tableName, Literal(table_info.name)))
+        self.graph.add((table_uri, self.db_ns.schemaName, Literal(table_info.schema)))
+        
+        if table_info.row_count is not None:
+            self.graph.add((table_uri, self.db_ns.rowCount, Literal(table_info.row_count)))
+            
         if table_info.comment:
             self.graph.add((table_uri, RDFS.comment, Literal(table_info.comment)))
+            
+        # Add semantic business description based on table name patterns
+        business_desc = self._generate_table_business_description(table_info.name)
+        if business_desc:
+            self.graph.add((table_uri, self.db_ns.businessDescription, Literal(business_desc)))
+            
+        # Add primary key information
+        if table_info.primary_keys:
+            for pk in table_info.primary_keys:
+                self.graph.add((table_uri, self.db_ns.primaryKey, Literal(pk)))
 
         # Add columns as properties
         for column in table_info.columns:
@@ -59,7 +82,7 @@ class OntologyGenerator:
             self._add_relationship_to_ontology(table_uri, fk, table_info.name)
 
     def _add_column_to_ontology(self, table_uri: URIRef, column: ColumnInfo, table_name: str):
-        """Add a column as a data property to the ontology."""
+        """Add a column as a data property to the ontology with comprehensive database annotations."""
         # Create proper property URI
         prop_name = f"{self._clean_name(table_name)}_{self._clean_name(column.name)}"
         prop_uri = self.base_uri[prop_name]
@@ -75,10 +98,27 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.domain, table_uri))
         self.graph.add((prop_uri, RDFS.label, Literal(column.name)))
         
+        # Add comprehensive database-specific annotations
+        self.graph.add((prop_uri, self.db_ns.columnName, Literal(column.name)))
+        self.graph.add((prop_uri, self.db_ns.tableName, Literal(table_name)))
+        self.graph.add((prop_uri, self.db_ns.sqlDataType, Literal(column.data_type)))
+        self.graph.add((prop_uri, self.db_ns.isNullable, Literal(column.is_nullable)))
+        self.graph.add((prop_uri, self.db_ns.isPrimaryKey, Literal(column.is_primary_key)))
+        self.graph.add((prop_uri, self.db_ns.isForeignKey, Literal(column.is_foreign_key)))
+        
+        # Add SQL query generation hints
+        full_column_ref = f"{table_name}.{column.name}"
+        self.graph.add((prop_uri, self.db_ns.sqlReference, Literal(full_column_ref)))
+        
         # Map SQL data types to proper XSD types
         xsd_type = self._map_sql_to_xsd(column.data_type)
         if xsd_type:
             self.graph.add((prop_uri, RDFS.range, xsd_type))
+        
+        # Add semantic business description based on column name patterns
+        business_desc = self._generate_column_business_description(column.name)
+        if business_desc:
+            self.graph.add((prop_uri, self.db_ns.businessDescription, Literal(business_desc)))
         
         # Add cardinality constraints for primary keys and nullable fields
         if column.is_primary_key:
@@ -100,7 +140,7 @@ class OntologyGenerator:
             self.graph.add((prop_uri, RDFS.comment, Literal(column.comment)))
 
     def _add_relationship_to_ontology(self, table_uri: URIRef, fk: Dict[str, str], table_name: str):
-        """Add a foreign key relationship as an object property."""
+        """Add a foreign key relationship as an object property with comprehensive database annotations."""
         # Create descriptive relationship name
         rel_name = f"{self._clean_name(table_name)}_has_{self._clean_name(fk['referenced_table'])}"
         prop_uri = self.base_uri[rel_name]
@@ -111,6 +151,18 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.range, referenced_table_uri))
         self.graph.add((prop_uri, RDFS.label, Literal(f"{table_name} has {fk['referenced_table']}")))
         
+        # Add comprehensive database-specific annotations for foreign keys
+        self.graph.add((prop_uri, self.db_ns.foreignKeyColumn, Literal(fk['column'])))
+        self.graph.add((prop_uri, self.db_ns.referencedTable, Literal(fk['referenced_table'])))
+        self.graph.add((prop_uri, self.db_ns.referencedColumn, Literal(fk['referenced_column'])))
+        
+        # Add SQL join condition
+        join_condition = f"{table_name}.{fk['column']} = {fk['referenced_table']}.{fk['referenced_column']}"
+        self.graph.add((prop_uri, self.db_ns.sqlJoinCondition, Literal(join_condition)))
+        
+        # Add relationship type annotation
+        self.graph.add((prop_uri, self.db_ns.relationshipType, Literal("many_to_one")))
+        
         # Add inverse relationship
         inverse_rel_name = f"{self._clean_name(fk['referenced_table'])}_referenced_by_{self._clean_name(table_name)}"
         inverse_prop_uri = self.base_uri[inverse_rel_name]
@@ -118,6 +170,9 @@ class OntologyGenerator:
         self.graph.add((inverse_prop_uri, RDFS.domain, referenced_table_uri))
         self.graph.add((inverse_prop_uri, RDFS.range, table_uri))
         self.graph.add((inverse_prop_uri, RDFS.label, Literal(f"{fk['referenced_table']} referenced by {table_name}")))
+        
+        # Add database annotations for inverse relationship
+        self.graph.add((inverse_prop_uri, self.db_ns.relationshipType, Literal("one_to_many")))
         
         # Link them as inverses
         self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
@@ -187,6 +242,73 @@ class OntologyGenerator:
         # Default to string for unknown types
         logger.warning(f"Unknown SQL type '{sql_type}', mapping to xsd:string")
         return XSD.string
+    
+    def _generate_table_business_description(self, table_name: str) -> str:
+        """Generate a business-friendly description for a table based on naming patterns."""
+        name_lower = table_name.lower()
+        
+        # Convert underscores to spaces and capitalize
+        readable_name = table_name.replace('_', ' ').title()
+        
+        # Generate description based on common patterns
+        if 'customer' in name_lower:
+            return f"Customer information and profile data"
+        elif 'order' in name_lower:
+            return f"Order transaction records"
+        elif 'product' in name_lower:
+            return f"Product catalog and inventory information"
+        elif 'user' in name_lower:
+            return f"User account and authentication data"
+        elif 'invoice' in name_lower:
+            return f"Invoice and billing information"
+        elif 'payment' in name_lower:
+            return f"Payment transaction records"
+        elif 'address' in name_lower:
+            return f"Address and location information"
+        elif 'category' in name_lower:
+            return f"Classification and categorization data"
+        elif 'item' in name_lower:
+            return f"Item details and specifications"
+        elif 'transaction' in name_lower:
+            return f"Transaction history and records"
+        elif 'log' in name_lower or 'audit' in name_lower:
+            return f"System logs and audit trail data"
+        else:
+            return f"Data table for {readable_name.lower()}"
+    
+    def _generate_column_business_description(self, column_name: str) -> str:
+        """Generate a business-friendly description for a column based on naming patterns."""
+        name_lower = column_name.lower()
+        
+        if 'id' in name_lower:
+            entity_name = column_name.replace('_id', '').replace('_', ' ')
+            return f"Unique identifier for {entity_name}"
+        elif 'name' in name_lower:
+            return "Name or title"
+        elif 'email' in name_lower:
+            return "Email address"
+        elif 'phone' in name_lower:
+            return "Phone number"
+        elif 'address' in name_lower:
+            return "Physical address"
+        elif 'date' in name_lower or 'time' in name_lower:
+            return "Date/time information"
+        elif 'amount' in name_lower or 'price' in name_lower or 'cost' in name_lower:
+            return "Monetary or quantity value"
+        elif 'count' in name_lower or 'quantity' in name_lower:
+            return "Numeric count or quantity"
+        elif 'status' in name_lower or 'state' in name_lower:
+            return "Status or state indicator"
+        elif 'description' in name_lower:
+            return "Descriptive text"
+        elif 'code' in name_lower:
+            return "Code or identifier"
+        elif 'type' in name_lower:
+            return "Type classification"
+        elif 'flag' in name_lower:
+            return "Boolean flag or indicator"
+        else:
+            return f"{column_name.replace('_', ' ').title()}"
 
     def enrich_with_llm(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> str:
         """Enriches the ontology with LLM insights via MCP tools."""
