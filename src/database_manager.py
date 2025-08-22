@@ -219,7 +219,7 @@ class DatabaseManager:
             return False
     
     def connect_snowflake(self, account: str, username: str, password: str,
-                         warehouse: str, database: str, schema: str = "PUBLIC") -> bool:
+                         warehouse: str, database: str, schema: str = "PUBLIC", role: str = "PUBLIC") -> bool:
         """Connect to Snowflake database with enhanced security and reliability."""
         try:
             # Validate inputs
@@ -227,10 +227,16 @@ class DatabaseManager:
                 logger.error("Missing required Snowflake connection parameters")
                 return False
             
+            # URL-encode password to handle special characters
+            from urllib.parse import quote_plus
+            encoded_password = quote_plus(password) if password else ""
+            
             connection_string = (
-                f"snowflake://{username}:{password}@{account}/"
-                f"{database}/{schema}?warehouse={warehouse}"
+                f"snowflake://{username}:{encoded_password}@{account}/"
+                f"{database}/{schema}?warehouse={warehouse}&role={role}"
             )
+            
+            logger.info(f"Connecting to Snowflake with account: {account}, database: {database}, warehouse: {warehouse}, schema: {schema}")
             self.engine = create_engine(
                 connection_string,
                 poolclass=QueuePool,
@@ -252,7 +258,8 @@ class DatabaseManager:
                 "username": username,
                 "warehouse": warehouse,
                 "database": database,
-                "schema": schema
+                "schema": schema,
+                "role": role
             }
             
             # Store connection parameters for reconnection
@@ -263,7 +270,8 @@ class DatabaseManager:
                 "password": password,
                 "warehouse": warehouse,
                 "database": database,
-                "schema": schema
+                "schema": schema,
+                "role": role
             }
             
             # Test connection with timeout
@@ -503,6 +511,68 @@ class DatabaseManager:
         # Use regex pattern for strict validation
         return bool(re.match(IDENTIFIER_PATTERN, identifier))
     
+    def _strip_leading_sql_comments(self, sql_query: str) -> str:
+        """Strip leading SQL comments to find the actual SQL statement.
+        
+        Handles both -- (line comments) and /* */ (block comments) at the beginning of queries.
+        
+        Args:
+            sql_query: SQL query that may contain leading comments
+            
+        Returns:
+            SQL query with leading comments removed
+        """
+        import re
+        
+        lines = sql_query.split('\n')
+        result_lines = []
+        in_block_comment = False
+        
+        for line in lines:
+            original_line = line
+            line = line.strip()
+            
+            # Handle block comment continuation
+            if in_block_comment:
+                if '*/' in line:
+                    # End of block comment found
+                    after_comment = line.split('*/', 1)[1].strip()
+                    in_block_comment = False
+                    if after_comment:  # If there's SQL after the comment
+                        result_lines.append(after_comment)
+                continue
+            
+            # Skip empty lines
+            if not line:
+                continue
+                
+            # Handle line comments
+            if line.startswith('--'):
+                continue
+                
+            # Handle block comments
+            if line.startswith('/*'):
+                if '*/' in line:
+                    # Single-line block comment
+                    after_comment = line.split('*/', 1)[1].strip()
+                    if after_comment:  # If there's SQL after the comment
+                        result_lines.append(after_comment)
+                        break
+                else:
+                    # Multi-line block comment starts
+                    in_block_comment = True
+                continue
+            
+            # This line contains actual SQL - add it and all remaining lines
+            result_lines.append(original_line)
+            # Add all remaining lines without further comment processing
+            remaining_index = lines.index(original_line) + 1
+            if remaining_index < len(lines):
+                result_lines.extend(lines[remaining_index:])
+            break
+        
+        return '\n'.join(result_lines).strip()
+    
     def get_table_relationships(self, schema_name: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
         """Get relationships between tables in a schema."""
         if not self.engine:
@@ -616,16 +686,18 @@ class DatabaseManager:
                 validation_result["error_type"] = "empty_query"
                 return validation_result
             
-            query_upper = query_stripped.upper()
+            # Step 2: Remove leading SQL comments to find actual SQL statement
+            query_without_comments = self._strip_leading_sql_comments(query_stripped)
+            query_upper = query_without_comments.upper()
             
-            # Check for multiple statements (security risk)
+            # Check for multiple statements (security risk) - use original query for this check
             if ';' in query_stripped[:-1]:  # Allow trailing semicolon
                 validation_result["error"] = "Multiple SQL statements not allowed for security"
                 validation_result["error_type"] = "security_error"
                 validation_result["suggestions"].append("Split multiple statements into separate requests")
                 return validation_result
             
-            # Determine and validate query type
+            # Determine and validate query type using comment-stripped query
             if query_upper.startswith('SELECT'):
                 validation_result["query_type"] = "SELECT"
             elif query_upper.startswith('WITH'):

@@ -1,79 +1,173 @@
-# Database Ontology MCP Server v0.2.0
+# Database Ontology MCP Server
 
-🚀 **Enhanced MCP server for database schema analysis and ontology generation with security, performance, and reliability improvements.**
+🚀 **Streamlined MCP server for database analysis with automatic ontology generation - now with just 8 essential tools for maximum simplicity and effectiveness.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![FastMCP](https://img.shields.io/badge/FastMCP-2.10+-blue)](https://github.com/jlowin/fastmcp)
 
-This project provides a robust, production-ready Python-based MCP (Model Context Protocol) server using FastMCP that analyzes relational database schemas (PostgreSQL and Snowflake) and generates high-quality ontologies in RDF/Turtle format. The server includes comprehensive LLM integration capabilities for semantic ontology enrichment.
+This project provides a focused, production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL and Snowflake) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
+
+## 🎯 Key Philosophy: Automatic Ontology Integration
+
+**Problem Solved**: Claude Desktop often ignores ontology generation tools during analytical sessions, treating them as optional rather than essential.
+
+**Solution**: Our main analysis tool `get_analysis_context()` automatically includes ontology generation, making semantic context readily available for every query.
 
 ## 🌟 Key Features
 
 ### 🔗 Database Connectivity
 - **PostgreSQL** and **Snowflake** support with connection pooling
-- Enhanced connection management with retry logic and health checks
-- Secure credential handling with environment variable validation
-- Connection timeout and error recovery mechanisms
+- **Environment variable fallback** - parameters optional, uses .env when not provided
+- **Enhanced connection management** with retry logic and timeout handling
+- **Automatic dependency management** for Snowflake connectors
 
-### 🔍 Advanced Schema Analysis
-- Parallel table analysis for improved performance
-- Comprehensive metadata extraction (columns, types, constraints, relationships)
-- Foreign key relationship mapping and validation
-- Row count estimation and data sampling with security controls
+### 🎯 Streamlined Architecture (8 Essential Tools)
+- **One main tool** (`get_analysis_context`) with automatic ontology generation
+- **Consolidated workflow** - no more tool confusion or bloat
+- **Inline functionality** - reduces dependencies between tools
+- **Focus on results** - maximum effectiveness with minimum complexity
 
-### 🎯 Intelligent Ontology Generation
-- High-quality RDF/OWL ontology generation with proper validation
-- Sophisticated SQL-to-XSD type mapping
-- Cardinality constraints and relationship modeling
-- Structured ontology serialization in multiple formats
+### 🧠 Automatic Ontology Generation
+- **Self-sufficient ontologies** with direct database references (`db:sqlReference`, `db:sqlJoinCondition`)
+- **Business context inference** from table and column naming patterns
+- **Complete SQL mappings** embedded directly in ontology
+- **Fan-trap detection** and query safety validation
 
-### 🧠 LLM-Powered Enrichment
-- Intelligent schema analysis and semantic naming suggestions
-- Business domain context inference from table and column names
-- Automated relationship labeling and description generation
-- Extensible integration for advanced enrichment capabilities
+### 🛡️ Advanced SQL Safety
+- **Fan-trap prevention protocols** with mandatory relationship analysis
+- **Query pattern validation** to prevent data multiplication errors
+- **Safe aggregation patterns** (UNION, separate CTEs, window functions)
+- **Comprehensive SQL validation** before execution
 
-### 🛡️ Security & Reliability
-- Input validation and SQL injection prevention
-- Credential sanitization in logs and error messages
-- Comprehensive error handling with structured responses
-- Rate limiting and connection pooling for production use
+### ⚡ Performance & Reliability
+- **Concurrent processing** with thread pool management
+- **Connection pooling** and resource optimization
+- **Comprehensive error handling** with structured responses
+- **Production-ready logging** and monitoring
 
-### ⚡ Performance & Scalability
-- Concurrent table analysis using thread pools
-- Efficient connection pooling and resource management
-- Optimized memory usage for large schemas
-- Configurable limits and timeouts
+## 📦 Python Library Installation
 
-### 📊 Observability
-- Structured JSON logging with configurable levels
-- Comprehensive error tracking and metrics
-- Performance timing and resource monitoring
-- Health check endpoints and status reporting
+### Required Dependencies
 
-## 🏗️ Enhanced Project Structure
+```bash
+# Install all required dependencies
+pip install -r requirements.txt
+```
+
+### Complete Library List
+
+The project uses the following Python libraries:
+
+#### **Core MCP Framework**
+```bash
+fastmcp>=2.10.0,<3.0.0           # FastMCP framework for MCP server implementation
+```
+
+#### **Database Connectivity**
+```bash
+sqlalchemy>=2.0.0,<3.0.0         # Database ORM and connection management
+psycopg2-binary>=2.9.0,<3.0.0    # PostgreSQL database adapter
+snowflake-sqlalchemy>=1.5.0,<2.0.0     # Snowflake SQLAlchemy dialect
+snowflake-connector-python>=3.0.0,<4.0.0  # Snowflake Python connector
+```
+
+#### **Configuration & Environment**
+```bash
+pydantic>=2.0.0,<3.0.0           # Data validation and settings management
+python-dotenv>=1.0.0,<2.0.0      # Environment variable loading from .env files
+```
+
+#### **Semantic Web & Ontology**
+```bash
+rdflib>=7.0.0,<8.0.0             # RDF graph creation and manipulation
+owlrl>=6.0.0,<7.0.0              # OWL reasoning and validation
+```
+
+#### **Automatic Dependencies (installed with above)**
+
+When you install the main dependencies, these will be automatically installed:
+
+**Database & Connection**:
+- `boto3`, `botocore` - AWS SDK (for Snowflake S3 integration)
+- `cryptography` - Encryption and security functions
+- `pyOpenSSL` - SSL/TLS support
+- `cffi` - C Foreign Function Interface
+- `asn1crypto` - ASN.1 parsing and encoding
+
+**Data Processing**:
+- `sortedcontainers` - Sorted list/dict implementations
+- `platformdirs` - Platform-specific directory locations
+- `filelock` - File locking utilities
+
+**Network & Auth**:
+- `requests` - HTTP library
+- `urllib3` - HTTP client
+- `certifi` - Certificate bundle
+- `pyjwt` - JWT token handling
+
+**Configuration**:
+- `tomlkit` - TOML file parsing
+- `typing_extensions` - Enhanced type hints
+
+### Manual Installation (if needed)
+
+If you encounter issues with automatic installation, install key components manually:
+
+```bash
+# Core framework
+pip install fastmcp>=2.10.0
+
+# Database support
+pip install sqlalchemy>=2.0.0 psycopg2-binary>=2.9.0
+
+# Snowflake support (may require additional system dependencies)
+pip install snowflake-sqlalchemy snowflake-connector-python
+
+# Semantic web
+pip install rdflib>=7.0.0 owlrl>=6.0.0
+
+# Configuration
+pip install pydantic>=2.0.0 python-dotenv>=1.0.0
+```
+
+### System Dependencies
+
+For some libraries, you might need system-level dependencies:
+
+**macOS (via Homebrew)**:
+```bash
+brew install postgresql  # For psycopg2
+brew install openssl     # For cryptographic functions
+```
+
+**Ubuntu/Debian**:
+```bash
+sudo apt-get install libpq-dev python3-dev  # For psycopg2
+sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
+```
+
+**Windows**:
+- Most dependencies work out of the box with pip
+- For PostgreSQL support, ensure PostgreSQL client libraries are installed
+
+## 🏗️ Streamlined Project Structure
 
 ```
 database-ontology-mcp/
 ├── src/
-│   ├── __init__.py                 # Package initialization and exports
-│   ├── main.py                     # Enhanced FastMCP server application
-│   ├── database_manager.py         # Advanced database connection and analysis
-│   ├── ontology_generator.py       # Intelligent RDF ontology generation
-│   ├── config.py                   # Configuration management system
+│   ├── __init__.py                 # Package initialization
+│   ├── main.py                     # Streamlined FastMCP server (8 tools, 623 lines)
+│   ├── main_original.py            # Backup of previous complex version (2143 lines)
+│   ├── main_backup.py              # Additional backup
+│   ├── database_manager.py         # Database connection and analysis
+│   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
+│   ├── config.py                   # Configuration management with .env support
 │   ├── constants.py                # Application constants and settings
-│   └── utils.py                    # Utility functions and helpers
-├── tests/
-│   ├── __init__.py
-│   ├── test_server.py              # Comprehensive MCP server tests
-│   ├── test_database_manager.py    # Database manager unit tests
-│   └── test_ontology_generator.py  # Ontology generator tests
-├── config/
-│   └── .env.template               # Enhanced environment configuration
-├── docs/                           # Documentation directory
-├── pyproject.toml                  # Modern Python project configuration
-├── requirements.txt                # Production dependencies
+│   └── utils.py                    # Utility functions
+├── run_server.py                   # Server startup script
+├── .env                            # Environment configuration (DO NOT COMMIT)
+├── requirements.txt                # Python dependencies
 └── README.md                       # This comprehensive guide
 ```
 
@@ -88,7 +182,7 @@ database-ontology-mcp/
 
 1. **Clone the repository:**
 ```bash
-git clone <repository-url>
+git clone https://github.com/your-org/database-ontology-mcp
 cd database-ontology-mcp
 ```
 
@@ -98,20 +192,20 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. **Install dependencies:**
+3. **Install all dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
 4. **Configure environment:**
 ```bash
-cp config/.env.template .env
-# Edit .env with your database credentials and preferences
+# Create .env file with your database credentials
+cp .env.template .env  # If template exists, or create new .env
 ```
 
-### Configuration
+### Environment Configuration
 
-The server uses environment variables for configuration. Copy `.env.template` to `.env` and customize:
+Create a `.env` file in the project root:
 
 ```bash
 # =================================================================
@@ -119,23 +213,31 @@ The server uses environment variables for configuration. Copy `.env.template` to
 # =================================================================
 
 # Server Configuration
-LOG_LEVEL=INFO                              # DEBUG, INFO, WARNING, ERROR
+LOG_LEVEL=INFO
 ONTOLOGY_BASE_URI=http://example.com/ontology/
 
-# PostgreSQL Configuration (required for PostgreSQL connections)
+# PostgreSQL Configuration (optional - can provide via tool parameters)
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
-POSTGRES_DATABASE=mydb
-POSTGRES_USERNAME=user
-POSTGRES_PASSWORD=password
+POSTGRES_DATABASE=postgres
+POSTGRES_USERNAME=postgres
+POSTGRES_PASSWORD=postgres
 
-# Snowflake Configuration (required for Snowflake connections)
-SNOWFLAKE_ACCOUNT=your-account
-SNOWFLAKE_USERNAME=user
-SNOWFLAKE_PASSWORD=password
+# Snowflake Configuration (optional - can provide via tool parameters)
+SNOWFLAKE_ACCOUNT=CLYKFLK-KA74251    # Use your actual account identifier
+SNOWFLAKE_USERNAME=your_username
+SNOWFLAKE_PASSWORD=your_password
 SNOWFLAKE_WAREHOUSE=COMPUTE_WH
-SNOWFLAKE_DATABASE=MYDB
-SNOWFLAKE_SCHEMA=PUBLIC
+SNOWFLAKE_DATABASE=SNOWFLAKE_SAMPLE_DATA
+SNOWFLAKE_SCHEMA=TPCH_SF10
+SNOWFLAKE_ROLE=PUBLIC
+
+# Snowflake Troubleshooting:
+# - Account format: Check Snowflake web UI URL for correct format
+#   Common formats: CLYKFLK-KA74251, account.region, account.region.cloud
+# - Role: Ensure your user has access to the specified role
+# - Warehouse: Must be running and accessible
+# - Database/Schema: Check permissions and case sensitivity
 ```
 
 ### Running the Server
@@ -144,442 +246,334 @@ SNOWFLAKE_SCHEMA=PUBLIC
 python run_server.py
 ```
 
-The enhanced server will start with comprehensive logging and health checks:
+The server will start with streamlined tool output:
 
 ```
 ================================================================
-Database Ontology MCP Server v0.2.0
-Enhanced with security, performance, and reliability improvements
+Database Ontology MCP Server - Streamlined Edition
+8 Essential Tools for Maximum Effectiveness
 ================================================================
 
-🔧 Available MCP Tools:
-  • connect_database - Connect to PostgreSQL or Snowflake with enhanced security
-  • list_schemas - List available database schemas
-  • analyze_schema - Parallel analysis of tables and columns
-  • generate_ontology - Generate RDF ontology with validation
-  • sample_table_data - Sample table data with security controls
-  • get_table_relationships - Analyze foreign key relationships
-  • get_enrichment_data - Prepare data for LLM enrichment
-  • apply_ontology_enrichment - Apply LLM suggestions to ontology
-  • get_server_info - Get comprehensive server information
+🔧 Streamlined MCP Tools (8 Essential):
+  1. connect_database      - Connect to PostgreSQL/Snowflake (uses .env fallback)
+  2. list_schemas         - List available database schemas
+  3. get_analysis_context - 🌟 MAIN TOOL: Complete analysis + automatic ontology
+  4. generate_ontology    - Manual ontology generation (fallback)
+  5. sample_table_data    - Secure data sampling with validation
+  6. validate_sql_syntax  - SQL validation with fan-trap detection
+  7. execute_sql_query    - Safe SQL execution with comprehensive warnings
+  8. get_server_info      - Server status and configuration
 
-🗄️  Supported Databases: PostgreSQL, Snowflake
-🧠  LLM Enrichment: Available via MCP prompts and tools
-🔒  Security: Enhanced credential handling and input validation
-⚡  Performance: Connection pooling and parallel processing
-📊  Observability: Structured logging and comprehensive error handling
+🎯 Key Improvement: Main analysis tool now includes automatic ontology generation!
+📊 Result: Claude Desktop gets semantic context automatically, no manual ontology steps needed.
+🔒 Safety: Comprehensive fan-trap detection prevents query result multiplication.
 
-🚀 Starting MCP server...
-📡 Server ready and listening for MCP protocol messages
+🚀 Starting streamlined MCP server...
+📡 Server ready - Connect via Claude Desktop MCP configuration
 ```
 
-## 🛠️ MCP Tools Reference
+## 🛠️ Streamlined MCP Tools Reference
 
-### Core Database Operations
+### 🌟 Main Tool: `get_analysis_context`
 
-#### `connect_database`
-Establishes a secure connection to PostgreSQL or Snowflake with enhanced validation.
+The primary tool that provides complete database analysis with automatic ontology generation.
+
+**Purpose**: Single tool that gives Claude Desktop everything it needs for database analysis.
+
+**Parameters:**
+```typescript
+{
+  schema_name?: string,     // Optional, defaults to public/default schema
+  base_uri?: string,       // Optional, uses ONTOLOGY_BASE_URI from .env
+  include_sample_data?: boolean  // Optional, includes sample data for context
+}
+```
+
+**What it includes automatically:**
+- Complete schema analysis (tables, columns, types, constraints)
+- Relationship mapping with cardinality detection
+- **Automatic ontology generation** with SQL references
+- Data sampling for context (when requested)
+- Fan-trap detection and prevention guidance
+- Business context inference
+
+**Returns:**
+```typescript
+{
+  schema_analysis: {
+    schema: string,
+    tables: Array<TableInfo>,
+    relationships: Array<RelationshipInfo>,
+    fan_trap_warnings: Array<string>
+  },
+  ontology: string,  // RDF/Turtle format with db:sqlReference annotations
+  sample_data?: Array<TableSamples>,
+  recommendations: {
+    safe_query_patterns: Array<string>,
+    risk_warnings: Array<string>
+  }
+}
+```
+
+### Core Database Tools
+
+#### 1. `connect_database`
+Connect to PostgreSQL or Snowflake with environment variable fallback.
+
+**Key Feature**: Parameters are optional - uses .env values when not provided.
 
 **Parameters:**
 ```typescript
 {
   db_type: "postgresql" | "snowflake",
-  host?: string,              // PostgreSQL only
-  port?: number,              // PostgreSQL only
-  database?: string,
-  username?: string,
-  password?: string,
-  account?: string,           // Snowflake only
-  warehouse?: string,         // Snowflake only
-  schema?: string             // Optional, defaults by database type
+  // All other parameters optional - falls back to .env values
+  host?: string, port?: number, database?: string,
+  username?: string, password?: string,
+  account?: string, warehouse?: string, schema?: string, role?: string
 }
 ```
-
-**Enhanced Features:**
-- Automatic parameter validation from environment variables
-- Connection pooling with configurable pool sizes
-- Health checks and automatic reconnection
-- Secure credential handling
 
 **Examples:**
 ```python
-# PostgreSQL with connection pooling
-result = connect_database(
-    db_type="postgresql",
-    host="localhost",
-    port=5432,
-    database="ecommerce_db",
-    username="analytics_user",
-    password="secure_password"
-)
+# Simple connection using .env values
+connect_database("postgresql")
+connect_database("snowflake")
 
-# Snowflake with warehouse optimization
-result = connect_database(
-    db_type="snowflake",
-    account="your-org-account",
-    username="analyst",
-    password="secure_password",
-    warehouse="ANALYTICS_WH",
-    database="PROD_DB",
-    schema="SALES"
-)
+# Override specific parameters
+connect_database("postgresql", host="custom.host.com", port=5433)
+connect_database("snowflake", account="CUSTOM-ACCOUNT", warehouse="ANALYTICS_WH")
 ```
 
-#### `analyze_schema`
-Performs comprehensive parallel analysis of database schema with enhanced performance.
+#### 2. `list_schemas`
+Get available database schemas.
 
-**Parameters:**
-```typescript
-{
-  schema_name?: string        // Optional, defaults to public/default schema
-}
-```
+**Returns:** `Array<string>` of schema names
 
-**Returns:**
-```typescript
-{
-  schema: string,
-  table_count: number,
-  tables: Array<{
-    name: string,
-    schema: string,
-    columns: Array<{
-      name: string,
-      data_type: string,
-      is_nullable: boolean,
-      is_primary_key: boolean,
-      is_foreign_key: boolean,
-      foreign_key_table?: string,
-      foreign_key_column?: string,
-      comment?: string
-    }>,
-    primary_keys: string[],
-    foreign_keys: Array<{
-      column: string,
-      referenced_table: string,
-      referenced_column: string
-    }>,
-    comment?: string,
-    row_count?: number
-  }>
-}
-```
-
-#### `generate_ontology`
-Generates a high-quality RDF/OWL ontology with optional LLM enrichment.
-
-**Parameters:**
-```typescript
-{
-  schema_name?: string,       // Schema to analyze
-  base_uri?: string,          // Ontology base URI
-  enrich_llm?: boolean        // Enable LLM enrichment
-}
-```
-
-**Returns:** RDF ontology in Turtle format with proper validation
-
-**Example Output:**
-```turtle
-@prefix ns: <http://company.com/ontology/> .
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-
-ns: a owl:Ontology ;
-    rdfs:label "Database Schema Ontology" ;
-    rdfs:comment "Ontology generated from database schema" .
-
-ns:Customer a owl:Class ;
-    rdfs:label "Customer" ;
-    rdfs:comment "Customer entity representing registered users" .
-
-ns:customerName a owl:DatatypeProperty ;
-    rdfs:domain ns:Customer ;
-    rdfs:range xsd:string ;
-    rdfs:label "customerName" ;
-    rdfs:comment "Full name of the customer" .
-
-ns:belongsToCustomer a owl:ObjectProperty ;
-    rdfs:domain ns:Order ;
-    rdfs:range ns:Customer ;
-    rdfs:label "belongsToCustomer" .
-```
-
-### Advanced LLM Integration
-
-#### `get_enrichment_data`
-Prepares structured data optimized for LLM-based ontology enrichment.
-
-**Returns:**
-```typescript
-{
-  schema_data: Array<{
-    table_name: string,
-    schema: string,
-    columns: Array<ColumnInfo>,
-    foreign_keys: Array<ForeignKey>,
-    row_count?: number,
-    comment?: string,
-    sample_data?: Array<Record<string, any>>  // Limited samples for context
-  }>,
-  instructions: {
-    task: string,
-    expected_format: {
-      classes: Array<ClassSuggestion>,
-      properties: Array<PropertySuggestion>,
-      relationships: Array<RelationshipSuggestion>
-    },
-    guidelines: string[]
-  }
-}
-```
-
-#### `apply_ontology_enrichment`
-Applies LLM-generated enrichment suggestions to create a semantically rich ontology.
+#### 3. `generate_ontology` (Fallback Tool)
+Manual ontology generation when you need specific control.
 
 **Parameters:**
 ```typescript
 {
   schema_name?: string,
   base_uri?: string,
-  enrichment_suggestions: {
-    classes: Array<{
-      original_name: string,
-      suggested_name: string,        // PascalCase
-      description: string
-    }>,
-    properties: Array<{
-      table_name: string,
-      original_name: string,
-      suggested_name: string,        // camelCase
-      description: string
-    }>,
-    relationships: Array<{
-      from_table: string,
-      to_table: string,
-      suggested_name: string,        // camelCase
-      description: string
-    }>
-  }
+  include_business_context?: boolean
 }
 ```
 
-### Utility Operations
+**Returns:** RDF ontology in Turtle format with embedded SQL references
 
-#### `sample_table_data`
-Securely samples table data with comprehensive validation.
+### Data & Validation Tools
+
+#### 4. `sample_table_data`
+Secure data sampling with comprehensive validation.
 
 **Parameters:**
 ```typescript
 {
-  table_name: string,         // Required, validated for security
-  schema_name?: string,       // Optional schema specification
-  limit?: number             // Max 1000, default 10
+  table_name: string,       // Required, validated against SQL injection
+  schema_name?: string,     // Optional schema specification
+  limit?: number           // Max 1000, default 10
 }
 ```
 
-**Security Features:**
-- SQL injection prevention
-- Identifier validation
-- Row limit enforcement
-- Sensitive data handling
+#### 5. `validate_sql_syntax`
+Advanced SQL validation with fan-trap detection.
 
-#### `get_table_relationships`
-Analyzes and maps all foreign key relationships in a schema.
+**Parameters:**
+```typescript
+{
+  sql_query: string        // SQL to validate
+}
+```
 
 **Returns:**
 ```typescript
 {
-  [table_name: string]: Array<{
-    column: string,
-    referenced_table: string,
-    referenced_column: string
-  }>
+  is_valid: boolean,
+  syntax_errors: Array<string>,
+  fan_trap_warnings: Array<string>,
+  safety_score: number,
+  recommendations: Array<string>
 }
 ```
 
-#### `get_server_info`
-Provides comprehensive server status and capability information.
+#### 6. `execute_sql_query`
+Safe SQL execution with comprehensive safety protocols.
 
-**Returns:**
-```typescript
-{
-  name: string,
-  version: string,
-  description: string,
-  supported_databases: string[],
-  features: string[],
-  tools: string[],
-  configuration: {
-    log_level: string,
-    base_uri: string,
-    max_sample_limit: number,
-    supported_formats: string[]
-  }
-}
+**Features:**
+- **Fan-trap detection** - Prevents data multiplication errors
+- **Query pattern analysis** - Identifies risky aggregation patterns
+- **Result validation** - Checks if results make business sense
+- **Execution limits** - Row limits and timeout protection
+
+**Critical Safety Patterns Included:**
+```sql
+-- ✅ SAFE: UNION approach for multi-fact queries
+WITH unified_facts AS (
+    SELECT customer_id, sales_amount, 0 as returns FROM sales
+    UNION ALL
+    SELECT customer_id, 0, return_amount FROM returns
+)
+SELECT customer_id, SUM(sales_amount), SUM(returns) FROM unified_facts GROUP BY customer_id;
+
+-- ❌ DANGEROUS: Direct joins with aggregation (causes fan-trap)
+SELECT customer_id, SUM(sales_amount), SUM(return_amount)
+FROM sales s LEFT JOIN returns r ON s.customer_id = r.customer_id
+GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 ```
 
-## 🧪 Testing
+#### 7. `get_server_info`
+Comprehensive server status and configuration information.
 
-The project includes comprehensive test coverage with multiple test suites:
+**Returns:** Server version, available features, tool list, configuration details
 
-### Running Tests
+## 🎯 Optimal Workflow for Claude Desktop
+
+### Recommended Analytical Session Startup
+
+Use this prompt to start an analytical session with automatic ontology integration:
+
+```
+I need to analyze the database. Please use get_analysis_context to provide a complete overview including schema analysis and ontology generation, then help me understand the data structure and suggest interesting analytical queries.
+```
+
+### Why This Works Better
+
+**Before (Complex Version)**:
+- 17+ tools caused confusion
+- Claude Desktop ignored ontology generation
+- Manual steps required for semantic context
+- Tool dependencies created workflow issues
+
+**Now (Streamlined Version)**:
+- 8 essential tools, crystal clear purpose
+- Main tool automatically includes ontology
+- No manual ontology steps needed
+- Self-contained functionality
+
+## 🔒 Advanced Fan-Trap Protection
+
+### The Fan-Trap Problem
+
+Fan-traps occur when joining tables with 1:many relationships and using aggregation functions, causing data multiplication:
+
+```sql
+-- This query is WRONG and will inflate sales figures
+SELECT c.customer_name, SUM(s.amount) as total_sales
+FROM customers c
+LEFT JOIN orders o ON c.id = o.customer_id
+LEFT JOIN shipments sh ON o.id = sh.order_id
+GROUP BY c.customer_name;
+-- If an order has multiple shipments, sales amount gets multiplied!
+```
+
+### Built-in Protection
+
+Our tools provide automatic protection:
+
+1. **Relationship Analysis** - Identifies all 1:many relationships
+2. **Pattern Detection** - Flags dangerous query patterns
+3. **Safe Alternatives** - Suggests UNION-based approaches
+4. **Result Validation** - Checks if totals make sense
+
+### Safe Query Patterns
+
+The server promotes these proven patterns:
+
+**UNION Approach (Recommended)**:
+```sql
+WITH unified_metrics AS (
+    SELECT entity_id, sales_amount, 0 as shipped_qty, 'SALES' as metric_type FROM sales
+    UNION ALL
+    SELECT entity_id, 0, shipped_quantity, 'SHIPMENT' as metric_type FROM shipments
+)
+SELECT entity_id, SUM(sales_amount), SUM(shipped_qty) FROM unified_metrics GROUP BY entity_id;
+```
+
+## 🧪 Testing & Validation
+
+### Quick Connection Test
 
 ```bash
-# Run all tests with coverage
-python -m pytest tests/ -v --cov=src --cov-report=term-missing
+# Test PostgreSQL connection
+python3 -c "
+from src.config import config_manager
+from src.database_manager import DatabaseManager
+db_config = config_manager.get_database_config()
+db_manager = DatabaseManager()
+success = db_manager.connect_postgresql(
+    db_config.postgres_host, db_config.postgres_port,
+    db_config.postgres_database, db_config.postgres_username, 
+    db_config.postgres_password
+)
+print(f'PostgreSQL connection: {\"✅ Success\" if success else \"❌ Failed\"}')
+"
 
-# Run specific test suites
-python -m pytest tests/test_database_manager.py -v
-python -m pytest tests/test_ontology_generator.py -v
-python -m pytest tests/test_server.py -v
-
-# Run with detailed output
-python -m unittest tests.test_server -v
+# Test Snowflake connection  
+python3 -c "
+from src.config import config_manager
+from src.database_manager import DatabaseManager
+db_config = config_manager.get_database_config()
+db_manager = DatabaseManager()
+success = db_manager.connect_snowflake(
+    db_config.snowflake_account, db_config.snowflake_username,
+    db_config.snowflake_password, db_config.snowflake_warehouse,
+    db_config.snowflake_database, db_config.snowflake_schema,
+    db_config.snowflake_role
+)
+print(f'Snowflake connection: {\"✅ Success\" if success else \"❌ Failed\"}')
+"
 ```
 
-### Test Structure
-
-```
-tests/
-├── test_server.py              # MCP server and integration tests
-├── test_database_manager.py    # Database connectivity and analysis tests
-└── test_ontology_generator.py  # Ontology generation and enrichment tests
-```
-
-### Test Coverage Areas
-
-- ✅ Database connection management and pooling
-- ✅ Schema analysis and table introspection
-- ✅ Ontology generation with various data types
-- ✅ LLM enrichment workflow and validation
-- ✅ Error handling and edge cases
-- ✅ Security validation and input sanitization
-- ✅ Configuration management
-- ✅ Utility functions and helpers
-
-## 🔧 Development
-
-### Code Quality Tools
-
-The project uses modern Python development tools:
+### Validate All Dependencies
 
 ```bash
-# Code formatting
-black src/ tests/
+# Check all required libraries are installed
+python3 -c "
+import sys
+required_libs = [
+    'fastmcp', 'sqlalchemy', 'psycopg2', 'snowflake.sqlalchemy', 
+    'snowflake.connector', 'pydantic', 'dotenv', 'rdflib', 'owlrl'
+]
+missing = []
+for lib in required_libs:
+    try:
+        __import__(lib)
+        print(f'✅ {lib}')
+    except ImportError:
+        print(f'❌ {lib}')
+        missing.append(lib)
 
-# Import sorting
-isort src/ tests/
-
-# Linting
-flake8 src/ tests/
-
-# Type checking
-mypy src/
-
-# Pre-commit hooks (recommended)
-pre-commit install
+if missing:
+    print(f'\\nMissing libraries: {missing}')
+    print('Run: pip install -r requirements.txt')
+else:
+    print('\\n🎉 All dependencies installed successfully!')
+"
 ```
 
-### Adding New Database Support
+## 🔧 Configuration Troubleshooting
 
-1. **Extend DatabaseManager:**
-```python
-def connect_mysql(self, host: str, port: int, database: str, 
-                  username: str, password: str) -> bool:
-    """Connect to MySQL database."""
-    # Implementation here
-    pass
-```
+### Snowflake Connection Issues
 
-2. **Update constants:**
-```python
-SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "mysql"]
-```
+**Account Format Problems**:
+- Check your Snowflake web UI URL
+- Common formats: `ORGNAME-ACCOUNT`, `ACCOUNT.REGION`, `ACCOUNT.REGION.CLOUD`
+- Try: `CLYKFLK-KA74251`, `KA74251.us-east-1.aws`
 
-3. **Add configuration validation:**
-```python
-def validate_db_config(self, db_type: str) -> Dict[str, Any]:
-    # Add MySQL validation logic
-    pass
-```
+**Role and Permissions**:
+- Ensure user has access to specified role (default: PUBLIC)
+- Verify warehouse is running and accessible
+- Check database and schema permissions
 
-### Extending Ontology Generation
+### PostgreSQL Connection Issues
 
-The `OntologyGenerator` class supports various enhancements:
-
-```python
-def add_domain_specific_annotations(self, domain: str):
-    """Add domain-specific OWL annotations."""
-    pass
-
-def generate_class_hierarchy(self, tables_info: List[TableInfo]):
-    """Generate sophisticated class hierarchies."""
-    pass
-
-def add_inference_rules(self, rules: List[str]):
-    """Add SWRL inference rules to the ontology."""
-    pass
-```
-
-### Performance Optimization
-
-Key areas for performance tuning:
-
-- **Connection Pooling:** Adjust pool sizes in `DatabaseManager`
-- **Parallel Processing:** Configure thread pool sizes in `ServerState`
-- **Caching:** Implement schema metadata caching
-- **Memory Management:** Optimize large table handling
-
-## 📚 API Documentation
-
-### MCP Protocol Integration
-
-The server implements the Model Context Protocol (MCP) specification with enhanced features:
-
-- **Structured Error Responses:** Consistent error handling with proper error types
-- **Parameter Validation:** Comprehensive input validation and sanitization
-- **Async Support:** Ready for asynchronous operation modes
-- **Protocol Versioning:** Compatible with MCP v1.0+ specifications
-
-### Environment Variables Reference
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | INFO | No |
-| `ONTOLOGY_BASE_URI` | Base URI for generated ontologies | http://example.com/ontology/ | No |
-| `POSTGRES_HOST` | PostgreSQL host | None | For PostgreSQL |
-| `POSTGRES_PORT` | PostgreSQL port | 5432 | For PostgreSQL |
-| `POSTGRES_DATABASE` | PostgreSQL database name | None | For PostgreSQL |
-| `POSTGRES_USERNAME` | PostgreSQL username | None | For PostgreSQL |
-| `POSTGRES_PASSWORD` | PostgreSQL password | None | For PostgreSQL |
-| `SNOWFLAKE_ACCOUNT` | Snowflake account identifier | None | For Snowflake |
-| `SNOWFLAKE_USERNAME` | Snowflake username | None | For Snowflake |
-| `SNOWFLAKE_PASSWORD` | Snowflake password | None | For Snowflake |
-| `SNOWFLAKE_WAREHOUSE` | Snowflake warehouse | None | For Snowflake |
-| `SNOWFLAKE_DATABASE` | Snowflake database | None | For Snowflake |
-| `SNOWFLAKE_SCHEMA` | Snowflake schema | PUBLIC | For Snowflake |
-
-## 🔒 Security Considerations
-
-### Production Deployment
-
-- **Environment Variables:** Use secure secret management systems
-- **Network Security:** Deploy behind firewalls and use VPNs
-- **Authentication:** Implement proper database user permissions
-- **Logging:** Ensure logs don't contain sensitive information
-- **Rate Limiting:** Configure appropriate request limits
-- **Connection Limits:** Set reasonable connection pool sizes
-
-### Security Features
-
-- ✅ SQL injection prevention through parameterized queries
-- ✅ Input validation and sanitization
-- ✅ Credential redaction in logs
-- ✅ Connection timeout and retry limits
-- ✅ Resource usage monitoring
-- ✅ Error message sanitization
+**Common Solutions**:
+- Verify PostgreSQL service is running
+- Check firewall/network connectivity
+- Confirm credentials and database name
+- Test with psql command line first
 
 ## 📄 License
 
@@ -587,42 +581,38 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+We welcome contributions! Key areas for improvement:
+
+1. **Additional Database Support** (MySQL, Oracle, etc.)
+2. **Enhanced Ontology Patterns** (domain-specific templates)
+3. **Advanced Query Safety** (more sophisticated fan-trap detection)
+4. **Performance Optimization** (caching, connection pooling)
 
 ### Development Process
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with tests
-4. Run the test suite (`pytest tests/ -v`)
-5. Run code quality checks (`black`, `isort`, `flake8`, `mypy`)
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+3. Test with both PostgreSQL and Snowflake
+4. Ensure all dependencies install correctly
+5. Run code quality checks
+6. Submit Pull Request
 
-## 📞 Support
+## 🔄 Version History
 
-- **Documentation:** Check this README and inline code documentation
-- **Issues:** Report bugs and request features via GitHub Issues
-- **Discussions:** Join community discussions for questions and ideas
+### Current - Streamlined Edition
+- ✨ Reduced from 17+ tools to 8 essential tools (2143→623 lines in main.py)
+- 🎯 Main tool with automatic ontology generation
+- 🛡️ Advanced fan-trap detection and prevention
+- 📦 Complete dependency management with installation guide
+- 🔧 Environment variable fallback for all connection parameters
+- ✅ Production-ready Snowflake support with account format handling
 
-## 🔄 Changelog
-
-### v0.2.0 - Enhanced Production Release
-- ✨ Complete architecture overhaul with enhanced security
-- ⚡ Performance improvements with connection pooling and parallel processing
-- 🛡️ Advanced error handling and input validation
-- 📊 Comprehensive logging and observability
-- 🧪 Extensive test coverage and quality assurance
-- 📚 Complete documentation overhaul
-- 🔧 Modern Python project configuration
-
-### v0.1.0 - Initial Release
-- Basic MCP server functionality
-- PostgreSQL and Snowflake support
-- Simple ontology generation
-- Core schema analysis features
+### Previous - Complex Edition (preserved in main_original.py)
+- Multiple redundant tools causing confusion
+- Manual ontology generation steps
+- Tool bloat with 17+ separate functions
+- Complex dependencies between tools
 
 ---
 
-**Built with ❤️ for the database and semantic web communities**
+**🎯 Built for Maximum Effectiveness: One Main Tool + Automatic Ontology = Better SQL from Business Language**

@@ -16,11 +16,11 @@ from typing import Dict, List, Optional, Any, Union
 from fastmcp import FastMCP
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
-from .config import Config
+from .config import config_manager
 
 # Initialize configuration and logging
-config = Config()
-logging.basicConfig(level=getattr(logging, config.log_level))
+server_config = config_manager.get_server_config()
+logging.basicConfig(level=getattr(logging, server_config.log_level))
 logger = logging.getLogger(__name__)
 
 # Initialize FastMCP
@@ -69,43 +69,72 @@ def connect_database(
     password: Optional[str] = None,
     account: Optional[str] = None,
     warehouse: Optional[str] = None,
-    schema: Optional[str] = "PUBLIC"
+    schema: Optional[str] = "PUBLIC",
+    role: Optional[str] = None
 ) -> Union[Dict[str, Any], str]:
     """Connect to a PostgreSQL or Snowflake database.
     
+    Parameters are optional - the tool will automatically use values from .env file when parameters are not provided.
+    
     Args:
         db_type: Database type ("postgresql" or "snowflake")
-        host: Database host (PostgreSQL only)
-        port: Database port (PostgreSQL only) 
-        database: Database name
-        username: Username for authentication
-        password: Password for authentication
-        account: Snowflake account identifier (Snowflake only)
-        warehouse: Snowflake warehouse (Snowflake only)
-        schema: Schema name (Snowflake only, default: "PUBLIC")
+        host: Database host (PostgreSQL only, uses POSTGRES_HOST from .env if not provided)
+        port: Database port (PostgreSQL only, uses POSTGRES_PORT from .env if not provided) 
+        database: Database name (uses POSTGRES_DATABASE or SNOWFLAKE_DATABASE from .env if not provided)
+        username: Username for authentication (uses POSTGRES_USERNAME or SNOWFLAKE_USERNAME from .env if not provided)
+        password: Password for authentication (uses POSTGRES_PASSWORD or SNOWFLAKE_PASSWORD from .env if not provided)
+        account: Snowflake account identifier (Snowflake only, uses SNOWFLAKE_ACCOUNT from .env if not provided)
+        warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
+        schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
+        role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
     
     Returns:
         Connection status information or error response
+        
+    Examples:
+        # Connect using .env file values
+        connect_database("postgresql")
+        connect_database("snowflake")
+        
+        # Override specific parameters
+        connect_database("postgresql", host="custom.host.com", port=5433)
     """
     with error_handler("connect_database") as handler:
         db_manager = get_db_manager()
+        db_config = config_manager.get_database_config()
         
         try:
             if db_type.lower() == "postgresql":
-                if not all([host, port, database, username]):
+                # Use provided parameters or fall back to config
+                final_host = host or db_config.postgres_host
+                final_port = port or db_config.postgres_port
+                final_database = database or db_config.postgres_database
+                final_username = username or db_config.postgres_username
+                final_password = password or db_config.postgres_password
+                
+                if not all([final_host, final_port, final_database, final_username]):
                     return create_error_response(
-                        "Missing required PostgreSQL parameters: host, port, database, username",
+                        "Missing required PostgreSQL parameters: host, port, database, username (provide via parameters or .env file)",
                         "parameter_error"
                     )
-                success = db_manager.connect_postgresql(host, port, database, username, password or "")
+                success = db_manager.connect_postgresql(final_host, final_port, final_database, final_username, final_password or "")
                 
             elif db_type.lower() == "snowflake":
-                if not all([account, username, database, warehouse]):
+                # Use provided parameters or fall back to config
+                final_account = account or db_config.snowflake_account
+                final_username = username or db_config.snowflake_username
+                final_password = password or db_config.snowflake_password
+                final_warehouse = warehouse or db_config.snowflake_warehouse
+                final_database = database or db_config.snowflake_database
+                final_schema = schema or db_config.snowflake_schema
+                final_role = role or db_config.snowflake_role
+                
+                if not all([final_account, final_username, final_database, final_warehouse]):
                     return create_error_response(
-                        "Missing required Snowflake parameters: account, username, database, warehouse", 
+                        "Missing required Snowflake parameters: account, username, database, warehouse (provide via parameters or .env file)", 
                         "parameter_error"
                     )
-                success = db_manager.connect_snowflake(account, username, password or "", warehouse, database, schema)
+                success = db_manager.connect_snowflake(final_account, final_username, final_password or "", final_warehouse, final_database, final_schema, final_role)
                 
             else:
                 return create_error_response(
@@ -303,7 +332,7 @@ def get_analysis_context(
                     tables_info.append(table_info)
                 
                 # Generate ontology
-                uri = config.ontology_base_uri
+                uri = server_config.ontology_base_uri
                 generator = OntologyGenerator(base_uri=uri)
                 ontology_ttl = generator.generate_from_schema(tables_info)
                 
@@ -407,7 +436,7 @@ def generate_ontology(
                 )
             
             # Generate ontology
-            uri = base_uri or config.ontology_base_uri
+            uri = base_uri or server_config.ontology_base_uri
             generator = OntologyGenerator(base_uri=uri)
             ontology_ttl = generator.generate_from_schema(tables_info)
             
@@ -520,7 +549,278 @@ def execute_sql_query(
     - **Business context**: "Customer information and profile data"
     
     Extract these from the ontology TTL format and use them directly in your SQL queries.
-    
+
+    ## 🚨 CRITICAL SQL TRAP PREVENTION PROTOCOL 🚨
+
+    ### MANDATORY PRE-EXECUTION CHECKLIST
+
+    **1. 🔍 RELATIONSHIP ANALYSIS (REQUIRED)**
+    - ALWAYS call `get_table_relationships()` first
+    - Identify ALL 1:many relationships in your query
+    - Flag any table appearing on "many" side of multiple relationships
+
+    **2. 🎯 FAN-TRAP DETECTION (CRITICAL)**
+
+    **IMMEDIATE RED FLAGS:**
+    - ❌ Sales + Shipments + SUM() = GUARANTEED FAN-TRAP
+    - ❌ Any fact table + dimension + aggregation = HIGH RISK
+    - ❌ Multiple LEFT JOINs + GROUP BY = DANGER ZONE
+    - ❌ Joining 3+ tables with SUM/COUNT/AVG = LIKELY INFLATED RESULTS
+
+    **PATTERN CHECK:**
+    ```
+    If query has: FROM tableA JOIN tableB JOIN tableC 
+    WHERE tableA→tableB (1:many) AND tableA→tableC (1:many)
+    Then: GUARANTEED CARTESIAN PRODUCT MULTIPLICATION
+    Result: SUM(tableA.amount) will be artificially inflated!
+    ```
+
+    **3. 🛡️ MANDATORY VALIDATION**
+    - Call `validate_sql_syntax()` before execution
+    - Review warnings about query complexity
+    - Check for multiple table joins with aggregation
+
+    ## ✅ SAFE QUERY PATTERNS
+
+    ### 🔒 PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
+
+    **Best for:** Multiple fact tables (sales, shipments, returns, etc.)
+
+    ```sql
+    WITH unified_facts AS (
+        -- Sales facts
+        SELECT 
+            client_id, 
+            product_id, 
+            sales_amount as amount, 
+            0 as shipment_qty, 
+            0 as return_qty,
+            'SALES' as fact_type
+        FROM sales
+        
+        UNION ALL
+        
+        -- Shipment facts  
+        SELECT 
+            client_id, 
+            product_id, 
+            0 as amount, 
+            shipment_quantity, 
+            0 as return_qty,
+            'SHIPMENT' as fact_type
+        FROM shipments s JOIN sales sal ON s.sales_id = sal.id
+        
+        UNION ALL
+        
+        -- Return facts
+        SELECT 
+            client_id, 
+            product_id, 
+            0 as amount, 
+            0 as shipment_qty, 
+            return_quantity,
+            'RETURN' as fact_type  
+        FROM returns r JOIN sales sal ON r.sales_id = sal.id
+    )
+    SELECT 
+        client_id,
+        product_id,
+        SUM(amount) as total_sales,
+        SUM(shipment_qty) as total_shipped,
+        SUM(return_qty) as total_returned
+    FROM unified_facts 
+    GROUP BY client_id, product_id;
+    ```
+
+    **Advantages:**
+    - ✅ Natural fan-trap immunity by design
+    - ✅ Unified data model for consistent aggregation
+    - ✅ Easy to extend with additional fact types
+    - ✅ Single aggregation logic for all measures
+    - ✅ Better performance with fewer table scans
+
+    ### 🔒 PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
+
+    **Use when:** UNION approach is not suitable
+
+    ```sql
+    WITH fact1_totals AS (
+        SELECT key, SUM(amount) as total_amount 
+        FROM fact1 GROUP BY key
+    ),
+    fact2_totals AS (
+        SELECT key, SUM(quantity) as total_quantity 
+        FROM fact2 GROUP BY key
+    )
+    SELECT 
+        f1.key, 
+        f1.total_amount,
+        COALESCE(f2.total_quantity, 0) as total_quantity
+    FROM fact1_totals f1 
+    LEFT JOIN fact2_totals f2 ON f1.key = f2.key;
+    ```
+
+    ### 🔒 PATTERN 3 - DISTINCT AGGREGATION (USE CAREFULLY)
+
+    **Warning:** Only use when you fully understand the data relationships
+
+    ```sql
+    SELECT 
+        key, 
+        SUM(DISTINCT fact1.amount) as total_amount,
+        SUM(fact2.quantity) as total_quantity 
+    FROM fact1 
+    LEFT JOIN fact2 ON fact1.id = fact2.fact1_id 
+    GROUP BY key;
+    ```
+
+    ### 🔒 PATTERN 4 - WINDOW FUNCTIONS
+
+    **For:** Complex analytical queries with preserved granularity
+
+    ```sql
+    SELECT DISTINCT 
+        key, 
+        SUM(amount) OVER (PARTITION BY key) as total_amount,
+        pre_aggregated_quantity
+    FROM fact1 
+    LEFT JOIN (
+        SELECT key, SUM(qty) as pre_aggregated_quantity 
+        FROM fact2 GROUP BY key
+    ) f2 USING(key);
+    ```
+
+    ## 🔄 RESULT VALIDATION (POST-EXECUTION)
+
+    **Always verify results make business sense:**
+    - Compare totals with business expectations
+    - Verify: `SELECT SUM(amount) FROM base_table` vs your query result
+    - Check row counts are reasonable
+    - If results seem too high → likely fan-trap occurred
+
+    ## 📋 COMMON DEADLY COMBINATIONS TO AVOID
+
+    ❌ **Never do these without proper fan-trap prevention:**
+    - `sales LEFT JOIN shipments + SUM(sales.amount)`
+    - `orders LEFT JOIN order_items LEFT JOIN products + SUM(orders.total)`
+    - `customers LEFT JOIN transactions LEFT JOIN transaction_items + aggregation`
+    - Any query joining parent→child1 + parent→child2 with SUM/COUNT
+
+    ## 🎯 RELATIONSHIP ANALYSIS EXAMPLES
+
+    **SAFE (1:1 relationships):**
+    ```
+    customers → customer_profiles (1:1) ✅
+    ```
+
+    **RISKY (1:many):**
+    ```
+    customers → orders (1:many) ⚠️
+    ```
+
+    **DEADLY (fan-trap):**
+    ```
+    orders → order_items (1:many) + orders → shipments (1:many) 🚨
+    ```
+
+    **IF YOUR QUERY INCLUDES THE DEADLY PATTERN:**
+    → STOP! Rewrite using UNION approach or separate aggregation CTEs
+
+    ## 🔧 EMERGENCY FAN-TRAP FIX
+
+    If you suspect fan-trap in existing query:
+    1. **Split into UNION approach** (recommended)
+    2. **Use separate aggregations**
+    3. **Add DISTINCT in SUM()** as temporary fix
+    4. **Validate results** against source tables
+    5. **Always aggregate fact tables separately** before joining
+
+    **Remember:** Fan-traps cause SILENT DATA CORRUPTION! Your query will execute successfully but return WRONG RESULTS. The bigger the multiplication factor, the more wrong your data becomes.
+
+    ## ⚡ AUTOMATED CHECK
+
+    If your query involves more than 2 tables and includes SUM/COUNT/AVG, you MUST analyze for fan-traps before execution. No exceptions!
+
+    ## 🎯 SUCCESS CRITERIA
+
+    Only proceed with `execute_sql_query()` after ALL checks pass:
+    - [ ] Schema analyzed ✓
+    - [ ] Relationships analyzed ✓  
+    - [ ] Fan-trap patterns checked ✓
+    - [ ] Syntax validated ✓
+    - [ ] Safe aggregation pattern used ✓
+    - [ ] Results make business sense ✓
+
+    ## Security Restrictions
+
+    **ALLOWED:**
+    - SELECT statements
+    - Common Table Expressions (WITH)
+    - EXPLAIN statements
+    - Database metadata queries
+
+    **PROHIBITED:**
+    - INSERT, UPDATE, DELETE statements
+    - DDL operations (CREATE, DROP, ALTER)
+    - Transaction control (COMMIT, ROLLBACK)
+    - System functions that modify state
+    - Dynamic SQL execution
+
+    ## Performance Guidelines
+
+    **Query Optimization:**
+    - Use appropriate indexes via schema analysis
+    - Limit result sets with WHERE clauses
+    - Use EXPLAIN to understand query plans
+    - Monitor execution time warnings
+
+    **Resource Management:**
+    - Default limit: 1000 rows
+    - Maximum limit: 5000 rows  
+    - Automatic timeout protection
+    - Memory usage monitoring
+
+    ## Error Handling
+
+    **Common Error Types:**
+    - **Syntax errors**: Use `validate_sql_syntax()` first
+    - **Permission errors**: Check allowed query types
+    - **Timeout errors**: Simplify complex queries
+    - **Memory errors**: Reduce result set size
+
+    **Best Practices:**
+    - Always validate syntax before execution
+    - Start with small result sets
+    - Use LIMIT clauses appropriately
+    - Monitor execution time and warnings
+
+    ## Examples
+
+    ### Multi-Fact Query (Recommended)
+    ```sql
+    WITH unified_facts AS (
+        SELECT customer_id, product_id, sales_amount, 0 as returns, 'SALES' as type
+        FROM sales
+        UNION ALL
+        SELECT customer_id, product_id, 0, return_amount, 'RETURNS' as type  
+        FROM returns r JOIN sales s ON r.sales_id = s.id
+    )
+    SELECT customer_id, SUM(sales_amount) as net_sales, SUM(returns) as total_returns
+    FROM unified_facts GROUP BY customer_id;
+    ```
+
+    ### Safe Aggregation Query
+    ```sql
+    WITH customer_sales AS (
+        SELECT customer_id, SUM(amount) as total_sales
+        FROM sales GROUP BY customer_id
+    )
+    SELECT c.name, cs.total_sales
+    FROM customers c
+    LEFT JOIN customer_sales cs ON c.id = cs.customer_id
+    ORDER BY cs.total_sales DESC;
+    ```
+
     Args:
         sql_query: SQL query to execute (must pass validation first)
         limit: Maximum number of rows to return (default: 1000, max: 5000)
@@ -599,8 +899,8 @@ def get_server_info() -> Dict[str, Any]:
             ]
         },
         "configuration": {
-            "log_level": config.log_level,
-            "ontology_base_uri": config.ontology_base_uri,
+            "log_level": server_config.log_level,
+            "ontology_base_uri": server_config.ontology_base_uri,
             "max_query_limit": 5000,
             "supported_formats": ["turtle"]
         }

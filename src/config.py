@@ -40,6 +40,7 @@ class DatabaseConfig:
     snowflake_warehouse: Optional[str] = None
     snowflake_database: Optional[str] = None
     snowflake_schema: str = DEFAULT_SNOWFLAKE_SCHEMA
+    snowflake_role: str = "PUBLIC"
 
 
 class ConfigManager:
@@ -47,7 +48,9 @@ class ConfigManager:
     
     def __init__(self):
         """Initialize configuration manager."""
-        load_dotenv()
+        # Load .env from project root (one level up from src)
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+        load_dotenv(env_path)
         self._server_config: Optional[ServerConfig] = None
         self._db_config: Optional[DatabaseConfig] = None
     
@@ -75,7 +78,8 @@ class ConfigManager:
                 snowflake_password=os.getenv("SNOWFLAKE_PASSWORD"),
                 snowflake_warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
                 snowflake_database=os.getenv("SNOWFLAKE_DATABASE"),
-                snowflake_schema=os.getenv("SNOWFLAKE_SCHEMA", DEFAULT_SNOWFLAKE_SCHEMA)
+                snowflake_schema=os.getenv("SNOWFLAKE_SCHEMA", DEFAULT_SNOWFLAKE_SCHEMA),
+                snowflake_role=os.getenv("SNOWFLAKE_ROLE", "PUBLIC")
             )
             logger.info("Database configuration loaded")
         return self._db_config
