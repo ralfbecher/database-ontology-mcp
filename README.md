@@ -1,6 +1,6 @@
 # Database Ontology MCP Server
 
-🚀 **Streamlined MCP server for database analysis with automatic ontology generation - now with just 8 essential tools for maximum simplicity and effectiveness.**
+🚀 **Streamlined MCP server for database analysis with automatic ontology generation and interactive charting - now with 9 essential tools for maximum effectiveness.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -22,8 +22,9 @@ This project provides a focused, production-ready Python-based MCP (Model Contex
 - **Enhanced connection management** with retry logic and timeout handling
 - **Automatic dependency management** for Snowflake connectors
 
-### 🎯 Streamlined Architecture (8 Essential Tools)
+### 🎯 Streamlined Architecture (9 Essential Tools)
 - **One main tool** (`get_analysis_context`) with automatic ontology generation
+- **Interactive charting tool** (`create_chart`) for data visualization
 - **Consolidated workflow** - no more tool confusion or bloat
 - **Inline functionality** - reduces dependencies between tools
 - **Focus on results** - maximum effectiveness with minimum complexity
@@ -186,7 +187,7 @@ git clone https://github.com/your-org/database-ontology-mcp
 cd database-ontology-mcp
 ```
 
-2. **Create a virtual environment (recommended):**
+2. **Create and activate a virtual environment:**
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -196,6 +197,8 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note**: The charting functionality requires visualization libraries (pandas, plotly, matplotlib, seaborn). These are included in `requirements.txt` and will be installed automatically in your virtual environment.
 
 4. **Configure environment:**
 ```bash
@@ -242,7 +245,9 @@ SNOWFLAKE_ROLE=PUBLIC
 
 ### Running the Server
 
+**Make sure your virtual environment is activated:**
 ```bash
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 python run_server.py
 ```
 
@@ -574,6 +579,29 @@ else:
 - Check firewall/network connectivity
 - Confirm credentials and database name
 - Test with psql command line first
+
+### Chart Creation Issues
+
+**"Missing required visualization libraries" Error**:
+
+This means the charting libraries aren't installed. **Solution**:
+
+1. **Activate your virtual environment**:
+   ```bash
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+2. **Install/reinstall requirements**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Verify installation**:
+   ```bash
+   python -c "import pandas, plotly, matplotlib, seaborn; print('✅ All chart libraries available')"
+   ```
+
+4. **Restart the MCP server** with the virtual environment activated
 
 ## 📄 License
 

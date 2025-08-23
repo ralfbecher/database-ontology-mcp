@@ -2,13 +2,16 @@
 """
 Streamlined Database Ontology MCP Server
 
-A focused MCP server with 8 essential tools for database analysis with automatic ontology generation.
+A focused MCP server with 9 essential tools for database analysis with automatic ontology generation and interactive charting.
 Main tool: get_analysis_context() - provides complete schema analysis with integrated ontology.
+New: create_chart() - creates interactive visualizations from analytical results.
 """
 
 import logging
 import json
 import asyncio
+import base64
+import io
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
@@ -36,15 +39,16 @@ def get_db_manager() -> DatabaseManager:
         _db_manager = DatabaseManager()
     return _db_manager
 
-def create_error_response(message: str, error_type: str, details: str = None) -> str:
+def create_error_response(message: str, error_type: str, details: str = None) -> Dict[str, Any]:
     """Create a standardized error response."""
     error_response = {
+        "success": False,
         "error": message,
         "error_type": error_type
     }
     if details:
         error_response["details"] = details
-    return json.dumps(error_response)
+    return error_response
 
 @contextmanager
 def error_handler(operation_name: str):
@@ -71,7 +75,7 @@ def connect_database(
     warehouse: Optional[str] = None,
     schema: Optional[str] = "PUBLIC",
     role: Optional[str] = None
-) -> Union[Dict[str, Any], str]:
+) -> Dict[str, Any]:
     """Connect to a PostgreSQL or Snowflake database.
     
     Parameters are optional - the tool will automatically use values from .env file when parameters are not provided.
@@ -163,7 +167,7 @@ def connect_database(
             )
 
 @mcp.tool()
-def list_schemas() -> Union[List[str], str]:
+def list_schemas() -> Dict[str, Any]:
     """Get a list of available schemas from the connected database.
     
     Returns:
@@ -182,7 +186,11 @@ def list_schemas() -> Union[List[str], str]:
         try:
             schemas = db_manager.get_schemas()
             logger.debug(f"Retrieved {len(schemas)} schemas")
-            return schemas
+            return {
+                "success": True,
+                "schemas": schemas,
+                "count": len(schemas)
+            }
         except Exception as e:
             logger.error(f"Failed to list schemas: {e}")
             return create_error_response(
@@ -195,7 +203,7 @@ def list_schemas() -> Union[List[str], str]:
 def get_analysis_context(
     schema_name: Optional[str] = None,
     include_ontology: bool = True
-) -> Union[Dict[str, Any], str]:
+) -> Dict[str, Any]:
     """🌟 MAIN TOOL: Get comprehensive analysis context for data exploration and SQL generation.
     
     This is the primary tool for database analysis. It provides everything needed in one call:
@@ -461,7 +469,7 @@ def sample_table_data(
     table_name: str,
     schema_name: Optional[str] = None,
     limit: int = 10
-) -> Union[List[Dict[str, Any]], str]:
+) -> Dict[str, Any]:
     """Sample data from a specific table for exploration and analysis.
     
     Args:
@@ -485,7 +493,14 @@ def sample_table_data(
         try:
             sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
             logger.info(f"Retrieved {len(sample_data)} sample rows from {table_name}")
-            return sample_data
+            return {
+                "success": True,
+                "table_name": table_name,
+                "schema_name": schema_name,
+                "sample_data": sample_data,
+                "row_count": len(sample_data),
+                "limit": limit
+            }
         except Exception as e:
             logger.error(f"Failed to sample table data: {e}")
             return create_error_response(
@@ -532,7 +547,7 @@ def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
 def execute_sql_query(
     sql_query: str, 
     limit: int = 1000
-) -> Union[Dict[str, Any], str]:
+) -> Dict[str, Any]:
     """Execute a validated SQL query and return results safely.
     
     ## 🚀 **STREAMLINED WORKFLOW** (Only 4 Steps):
@@ -854,6 +869,302 @@ def execute_sql_query(
         )
 
 @mcp.tool()
+def create_chart(
+    data_source: Union[List[Dict[str, Any]], str],
+    chart_type: str,
+    x_column: str,
+    y_column: Optional[str] = None,
+    color_column: Optional[str] = None,
+    title: Optional[str] = None,
+    chart_library: str = "plotly",
+    chart_style: str = "grouped",
+    width: int = 800,
+    height: int = 600,
+    output_format: str = "html"
+) -> Dict[str, Any]:
+    """Create interactive charts from analytical data results.
+    
+    📊 Supports multiple chart types with both Plotly (interactive) and Matplotlib/Seaborn (static) backends.
+    
+    Args:
+        data_source: Either a list of dictionaries (query results) or a SQL query string
+        chart_type: Type of chart ("bar", "line", "scatter", "heatmap")
+        x_column: Column name for X-axis
+        y_column: Column name for Y-axis (required for most chart types)
+        color_column: Column name for color grouping (optional)
+        title: Chart title (auto-generated if not provided)
+        chart_library: Library to use ("plotly" or "matplotlib")
+        chart_style: Chart style ("grouped", "stacked" for bar charts)
+        width: Chart width in pixels
+        height: Chart height in pixels
+        output_format: Output format ("html", "png", "json")
+    
+    Chart Types:
+        - "bar": Bar chart for discrete dimensions (supports grouped/stacked)
+        - "line": Line chart, especially good for time series
+        - "scatter": Scatter plot for correlation analysis
+        - "heatmap": Heatmap for correlation matrices or pivot data
+    
+    Returns:
+        Dictionary containing chart data, metadata, and base64-encoded output
+        
+    Examples:
+        # Create bar chart from SQL query results
+        create_chart(
+            data_source=query_results,
+            chart_type="bar",
+            x_column="category",
+            y_column="sales_amount",
+            title="Sales by Category"
+        )
+        
+        # Create time series line chart
+        create_chart(
+            data_source="SELECT date, revenue FROM daily_sales ORDER BY date",
+            chart_type="line",
+            x_column="date",
+            y_column="revenue",
+            title="Daily Revenue Trend"
+        )
+    """
+    try:
+        # Check for visualization libraries with detailed guidance
+        missing_libs = []
+        
+        try:
+            import pandas as pd
+        except ImportError:
+            missing_libs.append("pandas")
+            
+        if chart_library == "plotly":
+            try:
+                import plotly.express as px
+                import plotly.graph_objects as go
+                from plotly.io import to_html, to_image
+            except ImportError:
+                missing_libs.append("plotly")
+        else:
+            try:
+                import matplotlib.pyplot as plt
+                import seaborn as sns
+                plt.style.use('default')
+            except ImportError as e:
+                if "matplotlib" in str(e):
+                    missing_libs.append("matplotlib")
+                if "seaborn" in str(e):
+                    missing_libs.append("seaborn")
+        
+        if missing_libs:
+            return create_error_response(
+                f"Missing required visualization libraries: {', '.join(missing_libs)}",
+                "import_error",
+                f"Install the missing libraries: pip install {' '.join(missing_libs)}. "
+                f"If using a virtual environment, activate it first, then install the requirements: pip install -r requirements.txt"
+            )
+        
+        # Step 1: Get data
+        if isinstance(data_source, str):
+            # Execute SQL query to get data
+            db_manager = get_db_manager()
+            if not db_manager.has_engine():
+                return create_error_response(
+                    "No database connection established",
+                    "connection_error",
+                    "Use connect_database tool first"
+                )
+            
+            sql_result = db_manager.execute_sql_query(data_source, limit=10000)
+            if not sql_result['success']:
+                return create_error_response(
+                    f"Failed to execute query: {sql_result.get('error', 'Unknown error')}",
+                    "query_error"
+                )
+            data = sql_result['data']
+        else:
+            data = data_source
+        
+        if not data:
+            return create_error_response(
+                "No data provided for charting",
+                "data_error"
+            )
+        
+        # Convert to pandas DataFrame
+        df = pd.DataFrame(data)
+        
+        # Validate required columns
+        if x_column not in df.columns:
+            return create_error_response(
+                f"X-axis column '{x_column}' not found in data. Available columns: {list(df.columns)}",
+                "column_error"
+            )
+        
+        if chart_type in ["bar", "line", "scatter"] and y_column and y_column not in df.columns:
+            return create_error_response(
+                f"Y-axis column '{y_column}' not found in data. Available columns: {list(df.columns)}",
+                "column_error"
+            )
+        
+        # Generate title if not provided
+        if not title:
+            if chart_type == "bar":
+                title = f"{y_column or 'Count'} by {x_column}"
+            elif chart_type == "line":
+                title = f"{y_column} over {x_column}"
+            elif chart_type == "scatter":
+                title = f"{y_column} vs {x_column}"
+            elif chart_type == "heatmap":
+                title = f"Heatmap of {x_column}" + (f" and {y_column}" if y_column else "")
+            else:
+                title = f"Chart of {x_column}"
+        
+        # Create chart based on library
+        chart_output = None
+        chart_json = None
+        
+        if chart_library == "plotly":
+            fig = _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style)
+            
+            if output_format == "html":
+                chart_output = to_html(fig, include_plotlyjs='cdn', div_id='chart')
+            elif output_format == "png":
+                chart_output = base64.b64encode(to_image(fig, format="png", width=width, height=height)).decode()
+            elif output_format == "json":
+                chart_json = fig.to_dict()
+        else:
+            fig = _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
+            
+            if output_format == "png":
+                buffer = io.BytesIO()
+                fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+                chart_output = base64.b64encode(buffer.getvalue()).decode()
+                buffer.close()
+            else:
+                return create_error_response(
+                    "Matplotlib only supports PNG output format",
+                    "format_error"
+                )
+        
+        result = {
+            "success": True,
+            "chart_type": chart_type,
+            "chart_library": chart_library,
+            "title": title,
+            "data_points": len(df),
+            "columns_used": {
+                "x_column": x_column,
+                "y_column": y_column,
+                "color_column": color_column
+            },
+            "output_format": output_format,
+            "dimensions": {"width": width, "height": height}
+        }
+        
+        if chart_output:
+            result["chart_data"] = chart_output
+        if chart_json:
+            result["chart_json"] = chart_json
+            
+        logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Chart creation error: {e}")
+        return create_error_response(
+            f"Failed to create chart: {str(e)}",
+            "chart_error"
+        )
+
+def _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style):
+    """Create Plotly chart based on type."""
+    import pandas as pd
+    import plotly.express as px
+    import plotly.graph_objects as go
+    
+    if chart_type == "bar":
+        if chart_style == "stacked":
+            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title, 
+                        barmode='stack')
+        else:  # grouped
+            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title, 
+                        barmode='group')
+    elif chart_type == "line":
+        fig = px.line(df, x=x_column, y=y_column, color=color_column, title=title)
+        # Enhance for time series
+        if df[x_column].dtype in ['datetime64[ns]', 'object']:
+            try:
+                df[x_column] = pd.to_datetime(df[x_column])
+                fig.update_xaxes(title=x_column, type='date')
+            except:
+                pass
+    elif chart_type == "scatter":
+        fig = px.scatter(df, x=x_column, y=y_column, color=color_column, title=title,
+                        size_max=15)
+    elif chart_type == "heatmap":
+        if y_column:
+            # Pivot table heatmap
+            pivot_df = df.pivot_table(index=x_column, columns=y_column, aggfunc='size', fill_value=0)
+        else:
+            # Correlation heatmap
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            pivot_df = df[numeric_cols].corr()
+        
+        fig = px.imshow(pivot_df, title=title, aspect="auto")
+    else:
+        raise ValueError(f"Unsupported chart type: {chart_type}")
+    
+    # Apply consistent styling
+    fig.update_layout(
+        font=dict(size=12),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+    
+    return fig
+
+def _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height):
+    """Create Matplotlib/Seaborn chart based on type."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    # Set figure size
+    fig, ax = plt.subplots(figsize=(width/100, height/100))
+    
+    if chart_type == "bar":
+        if color_column and chart_style == "stacked":
+            pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, fill_value=0)
+            pivot_df.plot(kind='bar', stacked=True, ax=ax)
+        elif color_column:
+            sns.barplot(data=df, x=x_column, y=y_column, hue=color_column, ax=ax)
+        else:
+            sns.barplot(data=df, x=x_column, y=y_column, ax=ax)
+    elif chart_type == "line":
+        if color_column:
+            for group in df[color_column].unique():
+                group_data = df[df[color_column] == group]
+                ax.plot(group_data[x_column], group_data[y_column], label=group, marker='o')
+            ax.legend()
+        else:
+            ax.plot(df[x_column], df[y_column], marker='o')
+    elif chart_type == "scatter":
+        sns.scatterplot(data=df, x=x_column, y=y_column, hue=color_column, ax=ax, s=60)
+    elif chart_type == "heatmap":
+        if y_column:
+            pivot_df = df.pivot_table(index=x_column, columns=y_column, aggfunc='size', fill_value=0)
+        else:
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            pivot_df = df[numeric_cols].corr()
+        sns.heatmap(pivot_df, annot=True, cmap='viridis', ax=ax)
+    
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel(x_column)
+    if y_column:
+        ax.set_ylabel(y_column)
+    
+    plt.tight_layout()
+    return fig
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the streamlined MCP server and its capabilities.
     
@@ -862,16 +1173,17 @@ def get_server_info() -> Dict[str, Any]:
     """
     return {
         "name": "Streamlined Database Ontology MCP Server",
-        "version": "2.0.0", 
-        "description": "Focused MCP server with 8 essential tools for database analysis with automatic ontology generation",
+        "version": "2.1.0", 
+        "description": "Focused MCP server with 9 essential tools for database analysis with automatic ontology generation and interactive charting",
         "supported_databases": ["PostgreSQL", "Snowflake"],
         "features": [
             "🌟 Single main analysis tool with automatic ontology generation",
-            "🚀 Streamlined 4-step workflow (Connect → Analyze → Validate → Execute)",
+            "🚀 Streamlined 5-step workflow (Connect → Analyze → Validate → Execute → Visualize)",
             "🎯 Self-sufficient ontologies with direct SQL references",
             "🔧 Ready-to-use JOIN conditions and business context",
+            "📊 Interactive charting with Plotly and Matplotlib/Seaborn support",
             "⚡ Enhanced performance with consolidated functionality",
-            "🎨 Clean, focused interface with 8 essential tools"
+            "🎨 Clean, focused interface with 9 essential tools"
         ],
         "tools": [
             "connect_database",        # Connect to PostgreSQL or Snowflake database
@@ -881,6 +1193,7 @@ def get_server_info() -> Dict[str, Any]:
             "sample_table_data",      # Sample data from specific tables
             "validate_sql_syntax",    # Validate SQL before execution
             "execute_sql_query",      # Execute validated SQL queries
+            "create_chart",           # 📊 Create interactive charts from data
             "get_server_info"         # Server information and capabilities
         ],
         "workflow": {
@@ -888,7 +1201,8 @@ def get_server_info() -> Dict[str, Any]:
                 "1. connect_database() - Connect to your database",
                 "2. get_analysis_context() - Get complete schema + ontology + relationships", 
                 "3. validate_sql_syntax() - Validate your SQL queries",
-                "4. execute_sql_query() - Execute validated queries"
+                "4. execute_sql_query() - Execute validated queries",
+                "5. create_chart() - Visualize results with interactive charts"
             ],
             "main_tool": "get_analysis_context",
             "main_tool_benefits": [
@@ -902,7 +1216,9 @@ def get_server_info() -> Dict[str, Any]:
             "log_level": server_config.log_level,
             "ontology_base_uri": server_config.ontology_base_uri,
             "max_query_limit": 5000,
-            "supported_formats": ["turtle"]
+            "supported_formats": ["turtle", "html", "png", "json"],
+            "supported_chart_types": ["bar", "line", "scatter", "heatmap"],
+            "supported_chart_libraries": ["plotly", "matplotlib"]
         }
     }
 
