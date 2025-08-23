@@ -273,9 +273,57 @@ Database Ontology MCP Server - Streamlined Edition
 📊 Result: Claude Desktop gets semantic context automatically, no manual ontology steps needed.
 🔒 Safety: Comprehensive fan-trap detection prevents query result multiplication.
 
-🚀 Starting streamlined MCP server...
-📡 Server ready - Connect via Claude Desktop MCP configuration
+🚀 Starting MCP server with HTTP streamable transport...
+📡 Server ready and listening on port 8123 for HTTP MCP protocol messages
 ```
+
+## 🔗 Claude Desktop Integration
+
+### Option 1: Stdio Transport (Standard - Works for most features)
+
+Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "database-ontology": {
+      "command": "python",
+      "args": ["/absolute/path/to/database-ontology-mcp/run_server.py"]
+    }
+  }
+}
+```
+
+**Note**: Replace `/absolute/path/to/database-ontology-mcp/` with your actual project path.
+
+### Option 2: HTTP Transport (For Chart Images - Experimental)
+
+1. **Enable HTTP transport** by adding to your `.env` file:
+```bash
+MCP_USE_HTTP=true
+```
+
+2. **Add to Claude Desktop MCP settings**:
+```json
+{
+  "mcpServers": {
+    "database-ontology": {
+      "url": "http://localhost:8123/mcp"
+    }
+  }
+}
+```
+
+3. **Start the server manually**:
+```bash
+cd /path/to/database-ontology-mcp
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+python run_server.py
+```
+
+### Recommendation
+
+**Start with Option 1 (stdio transport)** - this is the standard way Claude Desktop connects to MCP servers and should work reliably. Chart images may be returned as file paths instead of being displayed directly.
 
 ## 🛠️ Streamlined MCP Tools Reference
 

@@ -1,7 +1,7 @@
 [project]
 name = "database-ontology-mcp"
-version = "0.2.0"
-description = "Enhanced MCP server for database schema analysis and ontology generation with security, performance, and reliability improvements"
+version = "0.3.0"
+description = "MCP server for database ad hoc analysis with ontology support and interactive charting"
 authors = [
     {name = "Database Ontology MCP Contributors", email = "contributors@example.com"}
 ]
@@ -33,6 +33,7 @@ dependencies = [
     "matplotlib>=3.7.0,<4.0.0",
     "seaborn>=0.12.0,<1.0.0",
     "pandas>=2.0.0,<3.0.0",
+    "pillow>=10.0.0,<11.0.0",
 ]
 
 [project.urls]

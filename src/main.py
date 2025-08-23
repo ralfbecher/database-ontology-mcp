@@ -10,8 +10,11 @@ New: create_chart() - creates interactive visualizations from analytical results
 import logging
 import json
 import asyncio
+import os
+import shutil
 import base64
 import io
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
@@ -20,17 +23,84 @@ from fastmcp import FastMCP
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
 from .config import config_manager
+from . import __version__, __name__ as SERVER_NAME, __description__
 
 # Initialize configuration and logging
 server_config = config_manager.get_server_config()
 logging.basicConfig(level=getattr(logging, server_config.log_level))
 logger = logging.getLogger(__name__)
 
+def setup_tmp_directory():
+    """Create tmp directory and clean up any existing chart files."""
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    tmp_dir = os.path.join(project_root, "tmp")
+    
+    # Remove existing tmp directory if it exists
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+        logger.info("Cleaned up existing tmp directory")
+    
+    # Create fresh tmp directory
+    os.makedirs(tmp_dir, exist_ok=True)
+    logger.info(f"Created tmp directory: {tmp_dir}")
+    
+    return tmp_dir
+
+def optimize_image_for_claude_file(image_path: str) -> str:
+    """Optimize image using PIL for MCP resource, return optimized file path."""
+    optimized_path = image_path.replace('.png', '_optimized.jpg')
+    
+    try:
+        from PIL import Image
+        
+        # Open and convert to RGB if needed
+        with Image.open(image_path) as img:
+            # Convert to RGB if it's in RGBA mode
+            if img.mode in ('RGBA', 'LA', 'P'):
+                # Create white background for transparent images
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                img = background
+            
+            # Resize for reasonable display
+            width, height = img.size
+            if width > 1000 or height > 800:
+                ratio = min(1000/width, 800/height)
+                new_size = (int(width * ratio), int(height * ratio))
+                resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
+            else:
+                resized_img = img
+            
+            # Save optimized version
+            resized_img.save(optimized_path, format='JPEG', quality=85, optimize=True)
+            
+            # Log file size
+            size_kb = os.path.getsize(optimized_path) / 1024
+            logger.info(f"Optimized image for MCP resource: {size_kb:.1f}KB")
+            
+            return optimized_path
+            
+    except ImportError:
+        logger.error("PIL not available for image optimization, using original")
+        return image_path
+    except Exception as e:
+        logger.error(f"Image optimization failed: {e}, using original")
+        return image_path
+
+# Setup tmp directory for chart files
+TMP_DIR = setup_tmp_directory()
+
 # Initialize FastMCP
-mcp = FastMCP("Database Ontology MCP Server")
+mcp = FastMCP(SERVER_NAME)
 
 # Global database manager instance
 _db_manager: Optional[DatabaseManager] = None
+
+# Global chart storage for MCP resources
+_chart_images: Dict[str, str] = {}
+
 
 def get_db_manager() -> DatabaseManager:
     """Get or create the global database manager instance."""
@@ -869,25 +939,25 @@ def execute_sql_query(
         )
 
 @mcp.tool()
-def create_chart(
-    data_source: Union[List[Dict[str, Any]], str],
+def generate_chart(
+    data_source: List[Dict[str, Any]],
     chart_type: str,
     x_column: str,
     y_column: Optional[str] = None,
     color_column: Optional[str] = None,
     title: Optional[str] = None,
-    chart_library: str = "plotly",
+    chart_library: str = "matplotlib",
     chart_style: str = "grouped",
     width: int = 800,
     height: int = 600,
-    output_format: str = "html"
+    output_format: str = "file"
 ) -> Dict[str, Any]:
-    """Create interactive charts from analytical data results.
+    """Generate interactive charts from SQL query result data.
     
     📊 Supports multiple chart types with both Plotly (interactive) and Matplotlib/Seaborn (static) backends.
     
     Args:
-        data_source: Either a list of dictionaries (query results) or a SQL query string
+        data_source: List of dictionaries containing query results (from execute_sql_query)
         chart_type: Type of chart ("bar", "line", "scatter", "heatmap")
         x_column: Column name for X-axis
         y_column: Column name for Y-axis (required for most chart types)
@@ -897,7 +967,7 @@ def create_chart(
         chart_style: Chart style ("grouped", "stacked" for bar charts)
         width: Chart width in pixels
         height: Chart height in pixels
-        output_format: Output format ("html", "png", "json")
+        output_format: Output format ("image", "file") - "image" returns MCP image resource for Claude Desktop
     
     Chart Types:
         - "bar": Bar chart for discrete dimensions (supports grouped/stacked)
@@ -906,25 +976,17 @@ def create_chart(
         - "heatmap": Heatmap for correlation matrices or pivot data
     
     Returns:
-        Dictionary containing chart data, metadata, and base64-encoded output
+        Dictionary containing chart metadata and MCP image resource for Claude Desktop display
         
     Examples:
-        # Create bar chart from SQL query results
+        # First get data with execute_sql_query, then create chart
+        query_results = execute_sql_query("SELECT category, sales_amount FROM sales")
         create_chart(
-            data_source=query_results,
+            data_source=query_results["data"],
             chart_type="bar",
             x_column="category",
             y_column="sales_amount",
             title="Sales by Category"
-        )
-        
-        # Create time series line chart
-        create_chart(
-            data_source="SELECT date, revenue FROM daily_sales ORDER BY date",
-            chart_type="line",
-            x_column="date",
-            y_column="revenue",
-            title="Daily Revenue Trend"
         )
     """
     try:
@@ -962,32 +1024,14 @@ def create_chart(
                 f"If using a virtual environment, activate it first, then install the requirements: pip install -r requirements.txt"
             )
         
-        # Step 1: Get data
-        if isinstance(data_source, str):
-            # Execute SQL query to get data
-            db_manager = get_db_manager()
-            if not db_manager.has_engine():
-                return create_error_response(
-                    "No database connection established",
-                    "connection_error",
-                    "Use connect_database tool first"
-                )
-            
-            sql_result = db_manager.execute_sql_query(data_source, limit=10000)
-            if not sql_result['success']:
-                return create_error_response(
-                    f"Failed to execute query: {sql_result.get('error', 'Unknown error')}",
-                    "query_error"
-                )
-            data = sql_result['data']
-        else:
-            data = data_source
-        
-        if not data:
+        # Validate input data
+        if not data_source:
             return create_error_response(
                 "No data provided for charting",
                 "data_error"
             )
+        
+        data = data_source
         
         # Convert to pandas DataFrame
         df = pd.DataFrame(data)
@@ -1018,32 +1062,39 @@ def create_chart(
             else:
                 title = f"Chart of {x_column}"
         
-        # Create chart based on library
-        chart_output = None
-        chart_json = None
+        # Create chart based on library and save to tmp directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_title = "".join(c for c in title.replace(" ", "_") if c.isalnum() or c in "_-")
+        
+        # Create chart and save to tmp directory  
+        filename = f"chart_{safe_title}_{timestamp}.png"
+        filepath = os.path.join(TMP_DIR, filename)
         
         if chart_library == "plotly":
             fig = _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style)
-            
-            if output_format == "html":
-                chart_output = to_html(fig, include_plotlyjs='cdn', div_id='chart')
-            elif output_format == "png":
-                chart_output = base64.b64encode(to_image(fig, format="png", width=width, height=height)).decode()
-            elif output_format == "json":
-                chart_json = fig.to_dict()
+            fig.write_image(filepath, width=width, height=height)
         else:
             fig = _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
+            fig.savefig(filepath, dpi=150, bbox_inches='tight')
             
-            if output_format == "png":
-                buffer = io.BytesIO()
-                fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
-                chart_output = base64.b64encode(buffer.getvalue()).decode()
-                buffer.close()
-            else:
-                return create_error_response(
-                    "Matplotlib only supports PNG output format",
-                    "format_error"
-                )
+            # Close figure to free memory
+            import matplotlib.pyplot as plt
+            plt.close(fig)
+        
+        # Handle output format
+        if output_format == "image":
+            # Generate unique image ID and register for MCP resource
+            image_id = f"{safe_title}_{timestamp}"
+            optimized_path = optimize_image_for_claude_file(filepath)
+            _chart_images[image_id] = optimized_path
+            
+            chart_output = {
+                "image_id": image_id,
+                "uri": f"resource://images/{image_id}",
+                "description": f"{chart_type.title()} chart: {title}"
+            }
+        else:  # file
+            chart_output = filepath
         
         result = {
             "success": True,
@@ -1060,10 +1111,13 @@ def create_chart(
             "dimensions": {"width": width, "height": height}
         }
         
-        if chart_output:
-            result["chart_data"] = chart_output
-        if chart_json:
-            result["chart_json"] = chart_json
+        if output_format == "image":
+            result["image_resource"] = chart_output
+            result["message"] = f"Chart available as MCP resource: {chart_output['uri']}"
+            result["backup_file"] = filepath
+        else:  # file
+            result["file_path"] = chart_output
+            result["message"] = f"Chart saved to: {chart_output}"
             
         logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
         return result
@@ -1113,11 +1167,21 @@ def _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title
     else:
         raise ValueError(f"Unsupported chart type: {chart_type}")
     
+    # Check if x-axis labels are long and need rotation
+    if chart_type in ["bar", "line", "scatter"]:
+        x_labels = df[x_column].astype(str).unique()
+        max_label_length = max([len(str(label)) for label in x_labels]) if len(x_labels) > 0 else 0
+        
+        if max_label_length > 10 or len(x_labels) > 8:
+            # Rotate x-axis labels for better readability
+            fig.update_xaxes(tickangle=-45)
+    
     # Apply consistent styling
     fig.update_layout(
         font=dict(size=12),
         plot_bgcolor='white',
-        paper_bgcolor='white'
+        paper_bgcolor='white',
+        margin=dict(b=100)  # Add bottom margin for rotated labels
     )
     
     return fig
@@ -1156,6 +1220,17 @@ def _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, t
             pivot_df = df[numeric_cols].corr()
         sns.heatmap(pivot_df, annot=True, cmap='viridis', ax=ax)
     
+    # Check if x-axis labels are long and need rotation
+    if chart_type in ["bar", "line", "scatter"]:
+        x_labels = [str(label) for label in ax.get_xticklabels()]
+        if x_labels:  # Only if we have labels
+            max_label_length = max([len(label.get_text()) for label in ax.get_xticklabels()]) if ax.get_xticklabels() else 0
+            num_labels = len(ax.get_xticklabels())
+            
+            if max_label_length > 10 or num_labels > 8:
+                # Rotate x-axis labels for better readability
+                plt.setp(ax.get_xticklabels(), rotation=-45, ha='right')
+    
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel(x_column)
     if y_column:
@@ -1163,6 +1238,27 @@ def _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, t
     
     plt.tight_layout()
     return fig
+
+@mcp.resource("resource://images/{image_id}")
+def get_image_resource(image_id: str):
+    """Stream chart image data for the given image ID."""
+    if image_id in _chart_images:
+        file_path = _chart_images[image_id]
+        try:
+            with open(file_path, 'rb') as f:
+                image_data = f.read()
+                logger.info(f"Serving image resource: {image_id} ({len(image_data)} bytes)")
+                return {
+                    "uri": f"resource://images/{image_id}",
+                    "mimeType": "image/jpeg",
+                    "blob": image_data
+                }
+        except FileNotFoundError:
+            logger.error(f"Chart image file not found: {file_path}")
+            raise ValueError(f"Chart image file not found: {image_id}")
+    else:
+        logger.error(f"Chart image ID not found: {image_id}")
+        raise ValueError(f"Chart image ID not found: {image_id}")
 
 @mcp.tool()
 def get_server_info() -> Dict[str, Any]:
@@ -1172,17 +1268,17 @@ def get_server_info() -> Dict[str, Any]:
         Dictionary containing server information and available tools
     """
     return {
-        "name": "Streamlined Database Ontology MCP Server",
-        "version": "2.1.0", 
-        "description": "Focused MCP server with 9 essential tools for database analysis with automatic ontology generation and interactive charting",
+        "name": SERVER_NAME,
+        "version": __version__, 
+        "description": __description__,
         "supported_databases": ["PostgreSQL", "Snowflake"],
         "features": [
             "🌟 Single main analysis tool with automatic ontology generation",
-            "🚀 Streamlined 5-step workflow (Connect → Analyze → Validate → Execute → Visualize)",
+            "🚀 5-step workflow (Connect → Analyze → Validate → Execute → Visualize)",
             "🎯 Self-sufficient ontologies with direct SQL references",
             "🔧 Ready-to-use JOIN conditions and business context",
             "📊 Interactive charting with Plotly and Matplotlib/Seaborn support",
-            "⚡ Enhanced performance with consolidated functionality",
+            "⚡ Performance with consolidated functionality",
             "🎨 Clean, focused interface with 9 essential tools"
         ],
         "tools": [
@@ -1193,7 +1289,7 @@ def get_server_info() -> Dict[str, Any]:
             "sample_table_data",      # Sample data from specific tables
             "validate_sql_syntax",    # Validate SQL before execution
             "execute_sql_query",      # Execute validated SQL queries
-            "create_chart",           # 📊 Create interactive charts from data
+            "generate_chart",         # 📊 Generate interactive charts from data
             "get_server_info"         # Server information and capabilities
         ],
         "workflow": {
@@ -1202,7 +1298,7 @@ def get_server_info() -> Dict[str, Any]:
                 "2. get_analysis_context() - Get complete schema + ontology + relationships", 
                 "3. validate_sql_syntax() - Validate your SQL queries",
                 "4. execute_sql_query() - Execute validated queries",
-                "5. create_chart() - Visualize results with interactive charts"
+                "5. generate_chart() - Visualize results with interactive charts"
             ],
             "main_tool": "get_analysis_context",
             "main_tool_benefits": [
@@ -1221,20 +1317,3 @@ def get_server_info() -> Dict[str, Any]:
             "supported_chart_libraries": ["plotly", "matplotlib"]
         }
     }
-
-# =============================================================================
-# Server Cleanup
-# =============================================================================
-
-def cleanup_server():
-    """Clean up server resources on shutdown."""
-    global _db_manager
-    if _db_manager and _db_manager.engine:
-        _db_manager.disconnect()
-        logger.info("Database connections closed")
-
-if __name__ == "__main__":
-    try:
-        mcp.run()
-    finally:
-        cleanup_server()

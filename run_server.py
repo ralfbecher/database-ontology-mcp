@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Enhanced startup script for the Database Ontology MCP Server v0.2.0."""
+"""Startup script for the Database Ontology MCP Server."""
 
 import sys
+import os
 import signal
 from pathlib import Path
 
@@ -9,9 +10,10 @@ from pathlib import Path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
-from src.main import mcp, cleanup_server
+from src.main import mcp
 from src.config import config_manager
 from src.utils import setup_logging
+from src import __version__, __name__ as SERVER_NAME
 
 # Setup logging
 config = config_manager.get_server_config()
@@ -21,7 +23,6 @@ def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown."""
     def signal_handler(signum, frame):
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-        cleanup_server()
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
@@ -30,13 +31,13 @@ def setup_signal_handlers():
 def print_startup_info():
     """Print server startup information."""
     logger.info("="*60)
-    logger.info("Database Ontology MCP Server v0.2.0")
-    logger.info("Enhanced with security, performance, and reliability improvements")
+    logger.info(f"{SERVER_NAME} v{__version__}")
+    logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
     logger.info("🔧 Available MCP Tools:")
     tools = [
-        "connect_database - Connect to PostgreSQL or Snowflake with enhanced security",
+        "connect_database - Connect to PostgreSQL or Snowflake with security",
         "list_schemas - List available database schemas",
         "analyze_schema - Parallel analysis of tables and columns", 
         "generate_ontology - Generate RDF ontology with validation",
@@ -52,13 +53,14 @@ def print_startup_info():
     logger.info("")
     logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake")
     logger.info("🧠 LLM Enrichment: Available via MCP prompts and tools")
-    logger.info("🔒 Security: Enhanced credential handling and input validation")
+    logger.info("🔒 Security: Credential handling and input validation")
     logger.info("⚡ Performance: Connection pooling and parallel processing")
     logger.info("📊 Observability: Structured logging and comprehensive error handling")
     logger.info("")
     logger.info(f"📋 Configuration:")
     logger.info(f"  • Log Level: {config.log_level}")
     logger.info(f"  • Base URI: {config.ontology_base_uri}")
+    logger.info(f"  • HTTP Server: {config.http_host}:{config.http_port}")
     logger.info("")
 
 def main():
@@ -70,11 +72,21 @@ def main():
         # Print startup information
         print_startup_info()
         
-        logger.info("🚀 Starting MCP server...")
-        logger.info("📡 Server ready and listening for MCP protocol messages")
+        # Check if we should use HTTP or stdio transport
+        use_http = os.getenv("MCP_USE_HTTP", "false").lower() == "true"
         
-        # Start the server
-        mcp.run()
+        if use_http:
+            logger.info("🚀 Starting MCP server with HTTP streamable transport...")
+            logger.info(f"📡 Server ready and listening on {config.http_host}:{config.http_port}/mcp for HTTP MCP protocol messages")
+            
+            # Start the server with HTTP transport for better resource streaming
+            mcp.run(transport="streamable-http", host=config.http_host, port=config.http_port, path="/mcp")
+        else:
+            logger.info("🚀 Starting MCP server with stdio transport...")
+            logger.info("📡 Server ready for stdio MCP protocol messages")
+            
+            # Start the server with stdio transport (standard for Claude Desktop)
+            mcp.run(transport="stdio")
         
     except KeyboardInterrupt:
         logger.info("⏹️  Server stopped by user (Ctrl+C)")
@@ -83,8 +95,6 @@ def main():
         logger.error("Please check your configuration and try again")
         return 1
     finally:
-        logger.info("🧹 Cleaning up server resources...")
-        cleanup_server()
         logger.info("✅ Server shutdown complete")
     
     return 0
