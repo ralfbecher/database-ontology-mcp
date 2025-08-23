@@ -18,6 +18,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
+from pathlib import Path
 
 from fastmcp import FastMCP
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
@@ -95,11 +96,52 @@ TMP_DIR = setup_tmp_directory()
 # Initialize FastMCP
 mcp = FastMCP(SERVER_NAME)
 
+# Add static file serving for chart images
+@mcp.custom_route("/charts/{filename}", methods=["GET"])
+async def serve_chart_image(request):
+    """Serve chart images as static files."""
+    from starlette.responses import FileResponse
+    from starlette.exceptions import HTTPException
+    
+    # Get filename from path parameters
+    filename = request.path_params['filename']
+    
+    # Security: only allow png and jpg files
+    if not filename.endswith(('.png', '.jpg', '.jpeg')):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_path = Path(TMP_DIR) / filename
+    
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Chart not found")
+    
+    # Additional security: ensure file is within tmp directory
+    try:
+        file_path.resolve().relative_to(Path(TMP_DIR).resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Invalid file path")
+    
+    return FileResponse(
+        str(file_path),
+        media_type="image/png" if filename.endswith('.png') else "image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"}
+    )
+
 # Global database manager instance
 _db_manager: Optional[DatabaseManager] = None
 
 # Global chart storage for MCP resources
 _chart_images: Dict[str, str] = {}
+
+
+def get_chart_http_url(filename: str) -> Optional[str]:
+    """Generate HTTP URL for chart image if HTTP transport is enabled."""
+    use_http = os.getenv("MCP_USE_HTTP", "false").lower() == "true"
+    if not use_http:
+        return None
+    
+    config = config_manager.get_server_config()
+    return f"http://{config.http_host}:{config.http_port}/charts/{filename}"
 
 
 def get_db_manager() -> DatabaseManager:
@@ -1111,13 +1153,23 @@ def generate_chart(
             "dimensions": {"width": width, "height": height}
         }
         
+        # Add HTTP URL if available
+        filename = os.path.basename(filepath)
+        http_url = get_chart_http_url(filename)
+        
         if output_format == "image":
             result["image_resource"] = chart_output
             result["message"] = f"Chart available as MCP resource: {chart_output['uri']}"
             result["backup_file"] = filepath
+            if http_url:
+                result["http_url"] = http_url
+                result["message"] += f"\nDirect HTTP URL: {http_url}"
         else:  # file
             result["file_path"] = chart_output
             result["message"] = f"Chart saved to: {chart_output}"
+            if http_url:
+                result["http_url"] = http_url
+                result["message"] += f"\nDirect HTTP URL: {http_url}"
             
         logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
         return result
