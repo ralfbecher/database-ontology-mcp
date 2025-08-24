@@ -16,8 +16,6 @@ class ServerConfig:
     """Server configuration settings."""
     log_level: str
     ontology_base_uri: str
-    http_host: str = "127.0.0.1"
-    http_port: int = 8123
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -61,9 +59,7 @@ class ConfigManager:
         if self._server_config is None:
             self._server_config = ServerConfig(
                 log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
-                ontology_base_uri=os.getenv("ONTOLOGY_BASE_URI", DEFAULT_BASE_URI),
-                http_host=os.getenv("MCP_HTTP_IP", "127.0.0.1"),
-                http_port=int(os.getenv("MCP_HTTP_PORT", "8123"))
+                ontology_base_uri=os.getenv("ONTOLOGY_BASE_URI", DEFAULT_BASE_URI)
             )
             logger.info("Server configuration loaded")
         return self._server_config

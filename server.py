@@ -60,7 +60,6 @@ def print_startup_info():
     logger.info(f"📋 Configuration:")
     logger.info(f"  • Log Level: {config.log_level}")
     logger.info(f"  • Base URI: {config.ontology_base_uri}")
-    logger.info(f"  • HTTP Server: {config.http_host}:{config.http_port}")
     logger.info("")
 
 def main():
@@ -72,21 +71,11 @@ def main():
         # Print startup information
         print_startup_info()
         
-        # Check if we should use HTTP or stdio transport
-        use_http = os.getenv("MCP_USE_HTTP", "false").lower() == "true"
+        logger.info("🚀 Starting MCP server with stdio transport...")
+        logger.info("📡 Server ready for stdio MCP protocol messages")
         
-        if use_http:
-            logger.info("🚀 Starting MCP server with HTTP streamable transport...")
-            logger.info(f"📡 Server ready and listening on {config.http_host}:{config.http_port}/mcp for HTTP MCP protocol messages")
-            
-            # Start the server with HTTP transport for better resource streaming
-            mcp.run(transport="streamable-http", host=config.http_host, port=config.http_port, path="/mcp")
-        else:
-            logger.info("🚀 Starting MCP server with stdio transport...")
-            logger.info("📡 Server ready for stdio MCP protocol messages")
-            
-            # Start the server with stdio transport (standard for Claude Desktop)
-            mcp.run(transport="stdio")
+        # Start the server with stdio transport (standard for Claude Desktop)
+        mcp.run(transport="stdio")
         
     except KeyboardInterrupt:
         logger.info("⏹️  Server stopped by user (Ctrl+C)")

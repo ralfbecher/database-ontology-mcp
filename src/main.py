@@ -96,52 +96,12 @@ TMP_DIR = setup_tmp_directory()
 # Initialize FastMCP
 mcp = FastMCP(SERVER_NAME)
 
-# Add static file serving for chart images
-@mcp.custom_route("/charts/{filename}", methods=["GET"])
-async def serve_chart_image(request):
-    """Serve chart images as static files."""
-    from starlette.responses import FileResponse
-    from starlette.exceptions import HTTPException
-    
-    # Get filename from path parameters
-    filename = request.path_params['filename']
-    
-    # Security: only allow png and jpg files
-    if not filename.endswith(('.png', '.jpg', '.jpeg')):
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    file_path = Path(TMP_DIR) / filename
-    
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Chart not found")
-    
-    # Additional security: ensure file is within tmp directory
-    try:
-        file_path.resolve().relative_to(Path(TMP_DIR).resolve())
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Invalid file path")
-    
-    return FileResponse(
-        str(file_path),
-        media_type="image/png" if filename.endswith('.png') else "image/jpeg",
-        headers={"Cache-Control": "public, max-age=3600"}
-    )
+# Chart serving no longer needed - SVG content returned directly in responses
 
 # Global database manager instance
 _db_manager: Optional[DatabaseManager] = None
 
-# Global chart storage for MCP resources
-_chart_images: Dict[str, str] = {}
-
-
-def get_chart_http_url(filename: str) -> Optional[str]:
-    """Generate HTTP URL for chart image if HTTP transport is enabled."""
-    use_http = os.getenv("MCP_USE_HTTP", "false").lower() == "true"
-    if not use_http:
-        return None
-    
-    config = config_manager.get_server_config()
-    return f"http://{config.http_host}:{config.http_port}/charts/{filename}"
+# Chart storage no longer needed - SVG content returned directly
 
 
 def get_db_manager() -> DatabaseManager:
@@ -1108,78 +1068,36 @@ def generate_chart(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = "".join(c for c in title.replace(" ", "_") if c.isalnum() or c in "_-")
         
-        # Create chart and save to tmp directory  
-        filename = f"chart_{safe_title}_{timestamp}.png"
-        filepath = os.path.join(TMP_DIR, filename)
+        # Generate chart directly as SVG
         
+        # Generate SVG content directly
         if chart_library == "plotly":
             fig = _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style)
-            fig.write_image(filepath, width=width, height=height)
+            # Get SVG as string directly
+            svg_content = fig.to_image(format='svg', width=width, height=height).decode('utf-8')
         else:
             fig = _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
-            fig.savefig(filepath, dpi=150, bbox_inches='tight')
+            # Get SVG content as string
+            import io
+            svg_buffer = io.StringIO()
+            fig.savefig(svg_buffer, format='svg', bbox_inches='tight')
+            svg_content = svg_buffer.getvalue()
+            svg_buffer.close()
             
             # Close figure to free memory
             import matplotlib.pyplot as plt
             plt.close(fig)
         
-        # Handle output format
-        if output_format == "image":
-            # Generate unique image ID and register for MCP resource
-            image_id = f"{safe_title}_{timestamp}"
-            optimized_path = optimize_image_for_claude_file(filepath)
-            _chart_images[image_id] = optimized_path
-            
-            chart_output = {
-                "image_id": image_id,
-                "uri": f"resource://images/{image_id}",
-                "description": f"{chart_type.title()} chart: {title}"
-            }
-        else:  # file
-            chart_output = filepath
         
-        result = {
-            "success": True,
-            "chart_type": chart_type,
-            "chart_library": chart_library,
-            "title": title,
-            "data_points": len(df),
-            "columns_used": {
-                "x_column": x_column,
-                "y_column": y_column,
-                "color_column": color_column
-            },
-            "output_format": output_format,
-            "dimensions": {"width": width, "height": height}
-        }
+        # Format response with SVG content
+        response_message = f"📊 **Chart generated successfully!**\n\n**Chart Details:**\n- Type: {chart_type.title()}\n- Library: {chart_library}\n- Title: {title}\n- Data Points: {len(df)}\n- Dimensions: {width}x{height}\n\n{svg_content}"
         
-        # Add HTTP URL if available
-        filename = os.path.basename(filepath)
-        http_url = get_chart_http_url(filename)
-        
-        if output_format == "image":
-            result["image_resource"] = chart_output
-            result["message"] = f"Chart available as MCP resource: {chart_output['uri']}"
-            result["backup_file"] = filepath
-            if http_url:
-                result["http_url"] = http_url
-                result["message"] += f"\nDirect HTTP URL: {http_url}"
-        else:  # file
-            result["file_path"] = chart_output
-            result["message"] = f"Chart saved to: {chart_output}"
-            if http_url:
-                result["http_url"] = http_url
-                result["message"] += f"\nDirect HTTP URL: {http_url}"
-            
         logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
-        return result
+        return response_message
         
     except Exception as e:
         logger.error(f"Chart creation error: {e}")
-        return create_error_response(
-            f"Failed to create chart: {str(e)}",
-            "chart_error"
-        )
+        return f"❌ **Failed to create chart:** {str(e)}"
 
 def _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style):
     """Create Plotly chart based on type."""
@@ -1291,26 +1209,7 @@ def _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, t
     plt.tight_layout()
     return fig
 
-@mcp.resource("resource://images/{image_id}")
-def get_image_resource(image_id: str):
-    """Stream chart image data for the given image ID."""
-    if image_id in _chart_images:
-        file_path = _chart_images[image_id]
-        try:
-            with open(file_path, 'rb') as f:
-                image_data = f.read()
-                logger.info(f"Serving image resource: {image_id} ({len(image_data)} bytes)")
-                return {
-                    "uri": f"resource://images/{image_id}",
-                    "mimeType": "image/jpeg",
-                    "blob": image_data
-                }
-        except FileNotFoundError:
-            logger.error(f"Chart image file not found: {file_path}")
-            raise ValueError(f"Chart image file not found: {image_id}")
-    else:
-        logger.error(f"Chart image ID not found: {image_id}")
-        raise ValueError(f"Chart image ID not found: {image_id}")
+# Image resource streaming no longer needed - SVG content returned directly
 
 @mcp.tool()
 def get_server_info() -> Dict[str, Any]:
