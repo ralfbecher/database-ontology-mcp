@@ -11,7 +11,6 @@ import logging
 import json
 import asyncio
 import os
-import shutil
 import base64
 import io
 from datetime import datetime
@@ -21,6 +20,7 @@ from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 
 from fastmcp import FastMCP
+import mcp.types as types
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
 from .config import config_manager
@@ -31,67 +31,26 @@ server_config = config_manager.get_server_config()
 logging.basicConfig(level=getattr(logging, server_config.log_level))
 logger = logging.getLogger(__name__)
 
+# Temporary directory for SVG file storage during session
+import tempfile
+import shutil
+
+# Create and clean tmp directory for chart storage in project root
+TMP_DIR = Path(__file__).parent.parent / "tmp"
+
 def setup_tmp_directory():
-    """Create tmp directory and clean up any existing chart files."""
-    project_root = os.path.dirname(os.path.dirname(__file__))
-    tmp_dir = os.path.join(project_root, "tmp")
-    
-    # Remove existing tmp directory if it exists
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
-        logger.info("Cleaned up existing tmp directory")
-    
-    # Create fresh tmp directory
-    os.makedirs(tmp_dir, exist_ok=True)
-    logger.info(f"Created tmp directory: {tmp_dir}")
-    
-    return tmp_dir
-
-def optimize_image_for_claude_file(image_path: str) -> str:
-    """Optimize image using PIL for MCP resource, return optimized file path."""
-    optimized_path = image_path.replace('.png', '_optimized.jpg')
-    
+    """Setup and clean temporary directory for chart storage."""
     try:
-        from PIL import Image
-        
-        # Open and convert to RGB if needed
-        with Image.open(image_path) as img:
-            # Convert to RGB if it's in RGBA mode
-            if img.mode in ('RGBA', 'LA', 'P'):
-                # Create white background for transparent images
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                if img.mode == 'P':
-                    img = img.convert('RGBA')
-                background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
-                img = background
-            
-            # Resize for reasonable display
-            width, height = img.size
-            if width > 1000 or height > 800:
-                ratio = min(1000/width, 800/height)
-                new_size = (int(width * ratio), int(height * ratio))
-                resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
-            else:
-                resized_img = img
-            
-            # Save optimized version
-            resized_img.save(optimized_path, format='JPEG', quality=85, optimize=True)
-            
-            # Log file size
-            size_kb = os.path.getsize(optimized_path) / 1024
-            logger.info(f"Optimized image for MCP resource: {size_kb:.1f}KB")
-            
-            return optimized_path
-            
-    except ImportError:
-        logger.error("PIL not available for image optimization, using original")
-        return image_path
+        if TMP_DIR.exists():
+            shutil.rmtree(TMP_DIR)
+            logger.debug(f"Cleaned existing tmp directory: {TMP_DIR}")
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Chart tmp directory ready: {TMP_DIR.absolute()}")
     except Exception as e:
-        logger.error(f"Image optimization failed: {e}, using original")
-        return image_path
+        logger.warning(f"Failed to setup chart tmp directory: {e}")
 
-# Setup tmp directory for chart files
-TMP_DIR = setup_tmp_directory()
+# Setup tmp directory on startup
+setup_tmp_directory()
 
 # Initialize FastMCP
 mcp = FastMCP(SERVER_NAME)
@@ -951,9 +910,8 @@ def generate_chart(
     chart_library: str = "matplotlib",
     chart_style: str = "grouped",
     width: int = 800,
-    height: int = 600,
-    output_format: str = "file"
-) -> Dict[str, Any]:
+    height: int = 600
+) -> list[types.ContentBlock]:
     """Generate interactive charts from SQL query result data.
     
     📊 Supports multiple chart types with both Plotly (interactive) and Matplotlib/Seaborn (static) backends.
@@ -1064,42 +1022,245 @@ def generate_chart(
             else:
                 title = f"Chart of {x_column}"
         
-        # Create chart based on library and save to tmp directory
+        # Create chart ID for file naming and logging
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = "".join(c for c in title.replace(" ", "_") if c.isalnum() or c in "_-")
+        chart_id = f"{chart_type}_{safe_title}_{timestamp}"
         
-        # Generate chart directly as SVG
+        # Generate chart and create PNG image for Claude Desktop
+        image_data = None
+        image_file_path = None
         
-        # Generate SVG content directly
         if chart_library == "plotly":
-            fig = _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style)
-            # Get SVG as string directly
-            svg_content = fig.to_image(format='svg', width=width, height=height).decode('utf-8')
-        else:
+            try:
+                fig = _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
+                # Try to export as PNG
+                try:
+                    image_bytes = fig.to_image(format='png', width=width, height=height, scale=2)
+                    image_data = base64.b64encode(image_bytes).decode('utf-8')
+                    # Save PNG to tmp directory
+                    image_file_path = _save_image_to_tmp(image_bytes, chart_id, 'png')
+                except Exception as e:
+                    if "kaleido" in str(e).lower():
+                        # Fallback to matplotlib if kaleido not available
+                        chart_library = "matplotlib"
+                    else:
+                        raise e
+            except ImportError:
+                # Plotly not available, fall back to matplotlib
+                chart_library = "matplotlib"
+        
+        if chart_library == "matplotlib":
             fig = _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
-            # Get SVG content as string
+            # Generate PNG bytes with optimized settings
             import io
-            svg_buffer = io.StringIO()
-            fig.savefig(svg_buffer, format='svg', bbox_inches='tight')
-            svg_content = svg_buffer.getvalue()
-            svg_buffer.close()
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, format='png', bbox_inches='tight', 
+                       facecolor='white', edgecolor='none', transparent=False,
+                       dpi=150, pad_inches=0.1)
+            image_bytes = img_buffer.getvalue()
+            img_buffer.close()
+            
+            # Convert to base64 for Claude Desktop
+            image_data = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Save PNG to tmp directory
+            image_file_path = _save_image_to_tmp(image_bytes, chart_id, 'png')
             
             # Close figure to free memory
             import matplotlib.pyplot as plt
             plt.close(fig)
         
         
-        # Format response with SVG content
-        response_message = f"📊 **Chart generated successfully!**\n\n**Chart Details:**\n- Type: {chart_type.title()}\n- Library: {chart_library}\n- Title: {title}\n- Data Points: {len(df)}\n- Dimensions: {width}x{height}\n\n{svg_content}"
-        
+        # Log chart creation success
         logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
-        return response_message
+        
+        # Return the chart as PNG image for Claude Desktop
+        if image_data:
+            # Include file path info if image was saved
+            file_info = f" (PNG saved to: {image_file_path})" if image_file_path else ""
+            
+            return [
+                types.TextContent(
+                    type="text", 
+                    text=f"Generated {chart_type} chart with {len(df)} data points using {chart_library}.{file_info}"
+                ),
+                types.ImageContent(
+                    type="image",
+                    data=image_data,
+                    mimeType="image/png"
+                )
+            ]
+        else:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"❌ Failed to generate chart image"
+                )
+            ]
         
     except Exception as e:
         logger.error(f"Chart creation error: {e}")
-        return f"❌ **Failed to create chart:** {str(e)}"
+        # Return error as HTML resource
+        error_html = f'''<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;display:flex;align-items:center;justify-content:center;background:white;">
+<div style="text-align:center;padding:20px;border:2px solid #dc2626;border-radius:8px;background:#fee2e2;color:#dc2626;max-width:400px;">
+<h2>❌ Chart Generation Failed</h2>
+<p>{str(e)[:100]}{"..." if len(str(e)) > 100 else ""}</p>
+</div>
+</body></html>'''
+        
+        return [
+            types.TextContent(
+                type="text",
+                text=f"❌ Chart generation failed: {str(e)}"
+            )
+        ]
 
-def _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style):
+def _save_image_to_tmp(image_bytes: bytes, chart_id: str, format: str) -> str:
+    """Save image bytes to temporary directory and return file path."""
+    try:
+        image_filename = f"{chart_id}.{format}"
+        image_file_path = TMP_DIR / image_filename
+        
+        with open(image_file_path, 'wb') as f:
+            f.write(image_bytes)
+        
+        logger.debug(f"Saved {format.upper()} chart to: {image_file_path}")
+        return str(image_file_path)
+    except Exception as e:
+        logger.warning(f"Failed to save {format.upper()} file: {e}")
+        return None
+
+def _save_svg_to_tmp(svg_content: str, chart_id: str) -> str:
+    """Save SVG content to temporary directory and return file path."""
+    try:
+        svg_filename = f"{chart_id}.svg"
+        svg_file_path = TMP_DIR / svg_filename
+        
+        with open(svg_file_path, 'w', encoding='utf-8') as f:
+            f.write(svg_content)
+        
+        logger.debug(f"Saved SVG chart to: {svg_file_path}")
+        return str(svg_file_path)
+    except Exception as e:
+        logger.warning(f"Failed to save SVG file: {e}")
+        return None
+
+def _create_react_chart_component(df, chart_type, x_column, y_column, color_column, title, width=800, height=600):
+    """Create React component code for chart rendering."""
+    import json
+    
+    # Convert DataFrame to JSON for React component
+    data = df.to_dict('records')
+    data_json = json.dumps(data, indent=2, default=str)
+    
+    # Generate appropriate chart component based on type
+    if chart_type == "bar":
+        return f"""import React from 'react';
+import {{ BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer }} from 'recharts';
+
+const ChartComponent = () => {{
+  const data = {data_json};
+
+  return (
+    <div style={{{{ width: '100%', height: '{height}px', padding: '20px' }}}}>
+      <h2 style={{{{ textAlign: 'center', marginBottom: '20px' }}}}>{title or f'{y_column or "Value"} by {x_column}'}</h2>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={{data}} margin={{{{ top: 20, right: 30, left: 20, bottom: 5 }}}}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="{x_column}" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Bar dataKey="{y_column or 'value'}" fill="#8884d8" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}};
+
+export default ChartComponent;"""
+
+    elif chart_type == "line":
+        return f"""import React from 'react';
+import {{ LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer }} from 'recharts';
+
+const ChartComponent = () => {{
+  const data = {data_json};
+
+  return (
+    <div style={{{{ width: '100%', height: '{height}px', padding: '20px' }}}}>
+      <h2 style={{{{ textAlign: 'center', marginBottom: '20px' }}}}>{title or f'{y_column} over {x_column}'}</h2>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={{data}} margin={{{{ top: 20, right: 30, left: 20, bottom: 5 }}}}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="{x_column}" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Line type="monotone" dataKey="{y_column or 'value'}" stroke="#8884d8" strokeWidth={{2}} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}};
+
+export default ChartComponent;"""
+
+    elif chart_type == "scatter":
+        return f"""import React from 'react';
+import {{ ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer }} from 'recharts';
+
+const ChartComponent = () => {{
+  const data = {data_json};
+
+  return (
+    <div style={{{{ width: '100%', height: '{height}px', padding: '20px' }}}}>
+      <h2 style={{{{ textAlign: 'center', marginBottom: '20px' }}}}>{title or f'{y_column} vs {x_column}'}</h2>
+      <ResponsiveContainer width="100%" height="100%">
+        <ScatterChart data={{data}} margin={{{{ top: 20, right: 30, left: 20, bottom: 5 }}}}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="{x_column}" name="{x_column}" />
+          <YAxis dataKey="{y_column or 'value'}" name="{y_column or 'value'}" />
+          <Tooltip cursor={{{{ strokeDasharray: '3 3' }}}} />
+          <Scatter fill="#8884d8" />
+        </ScatterChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}};
+
+export default ChartComponent;"""
+
+    else:  # Default to bar chart
+        return f"""import React from 'react';
+import {{ BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer }} from 'recharts';
+
+const ChartComponent = () => {{
+  const data = {data_json};
+
+  return (
+    <div style={{{{ width: '100%', height: '{height}px', padding: '20px' }}}}>
+      <h2 style={{{{ textAlign: 'center', marginBottom: '20px' }}}}>{title or f'Chart of {x_column}'}</h2>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={{data}} margin={{{{ top: 20, right: 30, left: 20, bottom: 5 }}}}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="{x_column}" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Bar dataKey="{y_column or 'value'}" fill="#8884d8" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}};
+
+export default ChartComponent;"""
+
+def _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width=800, height=600):
     """Create Plotly chart based on type."""
     import pandas as pd
     import plotly.express as px
@@ -1144,14 +1305,17 @@ def _create_plotly_chart(df, chart_type, x_column, y_column, color_column, title
         
         if max_label_length > 10 or len(x_labels) > 8:
             # Rotate x-axis labels for better readability
-            fig.update_xaxes(tickangle=-45)
+            fig.update_xaxes(tickangle=45)
     
     # Apply consistent styling
     fig.update_layout(
         font=dict(size=12),
         plot_bgcolor='white',
         paper_bgcolor='white',
-        margin=dict(b=100)  # Add bottom margin for rotated labels
+        margin=dict(b=100, t=60, l=60, r=60),  # Add margins for labels
+        showlegend=True if color_column else False,
+        width=width,
+        height=height
     )
     
     return fig
@@ -1199,7 +1363,7 @@ def _create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, t
             
             if max_label_length > 10 or num_labels > 8:
                 # Rotate x-axis labels for better readability
-                plt.setp(ax.get_xticklabels(), rotation=-45, ha='right')
+                plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
     
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel(x_column)
