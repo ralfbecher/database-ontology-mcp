@@ -24,42 +24,7 @@ def generate_chart(
     width: int = 800,
     height: int = 600
 ) -> list[types.ContentBlock]:
-    """Generate interactive charts from SQL query result data.
-    
-    📈 Supports multiple chart types with both Plotly (interactive) and Matplotlib/Seaborn (static) backends.
-    
-    Args:
-        data_source: List of dictionaries containing query results (from execute_sql_query)
-        chart_type: Type of chart ("bar", "line", "scatter", "heatmap")
-        x_column: Column name for X-axis
-        y_column: Column name for Y-axis (required for most chart types)
-        color_column: Column name for color grouping (optional)
-        title: Chart title (auto-generated if not provided)
-        chart_library: Library to use ("plotly" or "matplotlib")
-        chart_style: Chart style ("grouped", "stacked" for bar charts)
-        width: Chart width in pixels
-        height: Chart height in pixels
-    
-    Chart Types:
-        - "bar": Bar chart for discrete dimensions (supports grouped/stacked)
-        - "line": Line chart, especially good for time series
-        - "scatter": Scatter plot for correlation analysis
-        - "heatmap": Heatmap for correlation matrices or pivot data
-    
-    Returns:
-        MCP ContentBlock list with chart image for Claude Desktop display
-        
-    Examples:
-        # First get data with execute_sql_query, then create chart
-        query_results = execute_sql_query("SELECT category, sales_amount FROM sales")
-        generate_chart(
-            data_source=query_results["data"],
-            chart_type="bar",
-            x_column="category",
-            y_column="sales_amount",
-            title="Sales by Category"
-        )
-    """
+    """Generate chart implementation. Full documentation in main.py."""
     try:
         # Check for visualization libraries with detailed guidance
         missing_libs = []

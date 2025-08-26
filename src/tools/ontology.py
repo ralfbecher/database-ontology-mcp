@@ -18,24 +18,7 @@ def generate_ontology(
     base_uri: Optional[str] = None,
     enrich_llm: bool = False
 ) -> str:
-    """Generate a database ontology with direct SQL generation support.
-    
-    ℹ️  Most users should use get_analysis_context() instead, which includes ontology automatically.
-    
-    This tool generates a comprehensive ontology containing:
-    - Direct database table/column references (customers.customer_id)
-    - Ready-to-use JOIN conditions (orders.customer_id = customers.customer_id)
-    - Business-friendly descriptions for understanding data meaning
-    - Complete metadata (data types, constraints, row counts)
-    
-    Args:
-        schema_name: Name of the schema to generate ontology from (optional)
-        base_uri: Base URI for the ontology (optional, uses config default)
-        enrich_llm: Whether to enrich the ontology with LLM insights (default: False)
-    
-    Returns:
-        RDF ontology in Turtle format with complete database mappings
-    """
+    """Generate ontology implementation. Full documentation in main.py."""
     try:
         db_manager = get_db_manager()
         server_config = config_manager.get_server_config()
@@ -96,27 +79,7 @@ def generate_ontology(
 def load_ontology_from_file(
     file_path: str
 ) -> Dict[str, Any]:
-    """Load a previously saved or user-edited ontology from the tmp folder.
-    
-    This tool allows loading ontologies that were:
-    - Previously generated and saved by get_analysis_context()  
-    - Manually edited by users for enhanced analytical context
-    - Created externally and placed in the tmp folder
-    
-    Args:
-        file_path: Path to the ontology file (.ttl format)
-                  Can be absolute path or relative to tmp folder
-    
-    Returns:
-        Dictionary containing the loaded ontology content and metadata
-        
-    Examples:
-        # Load a previously saved ontology
-        load_ontology_from_file("ontology_public_20240826_143022.ttl")
-        
-        # Load with full path
-        load_ontology_from_file("/path/to/tmp/ontology_custom.ttl")
-    """
+    """Load ontology from file implementation. Full documentation in main.py."""
     try:
         # Get tmp directory
         TMP_DIR = Path(__file__).parent.parent.parent / "tmp"

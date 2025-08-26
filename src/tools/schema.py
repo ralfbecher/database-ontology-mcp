@@ -25,11 +25,7 @@ def error_handler(operation_name: str):
 
 
 def list_schemas() -> Dict[str, Any]:
-    """Get a list of available schemas from the connected database.
-    
-    Returns:
-        List of schema names or error response
-    """
+    """List database schemas. Full documentation in main.py."""
     with error_handler("list_schemas") as handler:
         db_manager = get_db_manager()
         
@@ -61,22 +57,7 @@ def get_analysis_context(
     schema_name: Optional[str] = None,
     include_ontology: bool = True
 ) -> Dict[str, Any]:
-    """🌟 MAIN TOOL: Get comprehensive analysis context for data exploration and SQL generation.
-    
-    This is the primary tool for database analysis. It provides everything needed in one call:
-    - Complete schema structure (tables, columns, relationships)  
-    - Automatic ontology generation with SQL references
-    - Ready-to-use JOIN conditions and column references
-    - Relationship warnings for safe aggregations
-    - SQL generation hints and best practices
-    
-    Args:
-        schema_name: Name of the schema to analyze (optional)
-        include_ontology: Whether to generate ontology (default: True, recommended)
-    
-    Returns:
-        Dictionary containing complete analysis context with schema and ontology data
-    """
+    """Get analysis context implementation. Full documentation in main.py."""
     try:
         db_manager = get_db_manager()
         server_config = config_manager.get_server_config()
@@ -268,16 +249,7 @@ def sample_table_data(
     schema_name: Optional[str] = None,
     limit: int = 10
 ) -> Dict[str, Any]:
-    """Sample data from a specific table for exploration and analysis.
-    
-    Args:
-        table_name: Name of the table to sample
-        schema_name: Name of the schema containing the table (optional)
-        limit: Maximum number of rows to return (default: 10, max: 1000)
-    
-    Returns:
-        List of dictionaries representing sample rows or error response
-    """
+    """Sample table data implementation. Full documentation in main.py."""
     with error_handler("sample_table_data") as handler:
         db_manager = get_db_manager()
         

@@ -23,36 +23,7 @@ def connect_database(
     role: Optional[str] = None,
     ssl: Optional[bool] = True
 ) -> Dict[str, Any]:
-    """Connect to a PostgreSQL, Snowflake, or Dremio database.
-    
-    Parameters are optional - the tool will automatically use values from .env file when parameters are not provided.
-    
-    Args:
-        db_type: Database type ("postgresql", "snowflake", or "dremio")
-        host: Database host (PostgreSQL/Dremio, uses POSTGRES_HOST or DREMIO_HOST from .env if not provided)
-        port: Database port (PostgreSQL/Dremio, uses POSTGRES_PORT or DREMIO_PORT from .env if not provided) 
-        database: Database name (uses POSTGRES_DATABASE or SNOWFLAKE_DATABASE from .env if not provided)
-        username: Username for authentication (uses POSTGRES_USERNAME, SNOWFLAKE_USERNAME, or DREMIO_USERNAME from .env if not provided)
-        password: Password for authentication (uses POSTGRES_PASSWORD, SNOWFLAKE_PASSWORD, or DREMIO_PASSWORD from .env if not provided)
-        account: Snowflake account identifier (Snowflake only, uses SNOWFLAKE_ACCOUNT from .env if not provided)
-        warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
-        schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
-        role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
-        ssl: Enable SSL connection (Dremio only, default: True)
-    
-    Returns:
-        Connection status information or error response
-        
-    Examples:
-        # Connect using .env file values
-        connect_database("postgresql")
-        connect_database("snowflake")
-        connect_database("dremio")
-        
-        # Override specific parameters
-        connect_database("postgresql", host="custom.host.com", port=5433)
-        connect_database("dremio", host="dremio.company.com", port=31010, ssl=False)
-    """
+    """Connect to database implementation. Full documentation in main.py."""
     try:
         db_manager = get_db_manager()
         db_config = config_manager.get_database_config()
@@ -138,22 +109,7 @@ def diagnose_connection_issue(
     username: Optional[str] = None,
     ssl: Optional[bool] = None
 ) -> Dict[str, Any]:
-    """Diagnose connection issues and provide comprehensive troubleshooting guidance.
-    
-    This tool provides detailed connection diagnostics with specific recommendations
-    for fixing common database connection problems. Includes connection testing steps,
-    common issues, and detailed troubleshooting guidance.
-    
-    Args:
-        db_type: Database type ("postgresql", "snowflake", or "dremio")
-        host: Database host (optional, will use config if not provided)
-        port: Database port (optional, will use config/default if not provided) 
-        username: Username (optional, will use config if not provided)
-        ssl: SSL setting for Dremio (optional, defaults to True)
-    
-    Returns:
-        Comprehensive diagnostic information with troubleshooting recommendations
-    """
+    """Diagnose connection issues. Full documentation in main.py."""
     try:
         db_config = config_manager.get_database_config()
         

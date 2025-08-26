@@ -10,11 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_server_info() -> Dict[str, Any]:
-    """Get information about the streamlined MCP server and its capabilities.
-    
-    Returns:
-        Dictionary containing server information and available tools
-    """
+    """Get server information implementation. Full documentation in main.py."""
     server_config = config_manager.get_server_config()
     
     return {
