@@ -105,23 +105,25 @@ def connect_database(
     account: Optional[str] = None,
     warehouse: Optional[str] = None,
     schema: Optional[str] = "PUBLIC",
-    role: Optional[str] = None
+    role: Optional[str] = None,
+    ssl: Optional[bool] = True
 ) -> Dict[str, Any]:
-    """Connect to a PostgreSQL or Snowflake database.
+    """Connect to a PostgreSQL, Snowflake, or Dremio database.
     
     Parameters are optional - the tool will automatically use values from .env file when parameters are not provided.
     
     Args:
-        db_type: Database type ("postgresql" or "snowflake")
-        host: Database host (PostgreSQL only, uses POSTGRES_HOST from .env if not provided)
-        port: Database port (PostgreSQL only, uses POSTGRES_PORT from .env if not provided) 
+        db_type: Database type ("postgresql", "snowflake", or "dremio")
+        host: Database host (PostgreSQL/Dremio, uses POSTGRES_HOST or DREMIO_HOST from .env if not provided)
+        port: Database port (PostgreSQL/Dremio, uses POSTGRES_PORT or DREMIO_PORT from .env if not provided) 
         database: Database name (uses POSTGRES_DATABASE or SNOWFLAKE_DATABASE from .env if not provided)
-        username: Username for authentication (uses POSTGRES_USERNAME or SNOWFLAKE_USERNAME from .env if not provided)
-        password: Password for authentication (uses POSTGRES_PASSWORD or SNOWFLAKE_PASSWORD from .env if not provided)
+        username: Username for authentication (uses POSTGRES_USERNAME, SNOWFLAKE_USERNAME, or DREMIO_USERNAME from .env if not provided)
+        password: Password for authentication (uses POSTGRES_PASSWORD, SNOWFLAKE_PASSWORD, or DREMIO_PASSWORD from .env if not provided)
         account: Snowflake account identifier (Snowflake only, uses SNOWFLAKE_ACCOUNT from .env if not provided)
         warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
         schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
         role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
+        ssl: Enable SSL connection (Dremio only, default: True)
     
     Returns:
         Connection status information or error response
@@ -130,9 +132,11 @@ def connect_database(
         # Connect using .env file values
         connect_database("postgresql")
         connect_database("snowflake")
+        connect_database("dremio")
         
         # Override specific parameters
         connect_database("postgresql", host="custom.host.com", port=5433)
+        connect_database("dremio", host="dremio.company.com", port=31010, ssl=False)
     """
     with error_handler("connect_database") as handler:
         db_manager = get_db_manager()
@@ -171,9 +175,24 @@ def connect_database(
                     )
                 success = db_manager.connect_snowflake(final_account, final_username, final_password or "", final_warehouse, final_database, final_schema, final_role)
                 
+            elif db_type.lower() == "dremio":
+                # Use provided parameters or fall back to config
+                final_host = host or getattr(db_config, 'dremio_host', None)
+                final_port = port or getattr(db_config, 'dremio_port', 31010)
+                final_username = username or getattr(db_config, 'dremio_username', None)
+                final_password = password or getattr(db_config, 'dremio_password', None)
+                final_ssl = ssl if ssl is not None else True
+                
+                if not all([final_host, final_port, final_username]):
+                    return create_error_response(
+                        "Missing required Dremio parameters: host, port, username (provide via parameters or .env file)",
+                        "parameter_error"
+                    )
+                success = db_manager.connect_dremio(final_host, final_port, final_username, final_password or "", final_ssl)
+                
             else:
                 return create_error_response(
-                    f"Unsupported database type: {db_type}. Use 'postgresql' or 'snowflake'",
+                    f"Unsupported database type: {db_type}. Use 'postgresql', 'snowflake', or 'dremio'",
                     "parameter_error"
                 )
             
@@ -1386,7 +1405,7 @@ def get_server_info() -> Dict[str, Any]:
         "name": SERVER_NAME,
         "version": __version__, 
         "description": __description__,
-        "supported_databases": ["PostgreSQL", "Snowflake"],
+        "supported_databases": ["PostgreSQL", "Snowflake", "Dremio"],
         "features": [
             "🌟 Single main analysis tool with automatic ontology generation",
             "🚀 5-step workflow (Connect → Analyze → Validate → Execute → Visualize)",

@@ -18,6 +18,7 @@ from .constants import (
     IDENTIFIER_PATTERN,
     POSTGRES_SYSTEM_SCHEMAS,
     SNOWFLAKE_SYSTEM_SCHEMAS,
+    DREMIO_SYSTEM_SCHEMAS,
     MIN_SAMPLE_LIMIT,
     MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT
@@ -108,10 +109,15 @@ class DatabaseManager:
                 params["host"], params["port"], params["database"],
                 params["username"], params["password"]
             )
-        else:  # snowflake
+        elif params["type"] == "snowflake":
             success = self.connect_snowflake(
                 params["account"], params["username"], params["password"],
                 params["warehouse"], params["database"], params.get("schema", "PUBLIC")
+            )
+        else:  # dremio
+            success = self.connect_dremio(
+                params["host"], params["port"], params["username"], params["password"],
+                params.get("ssl", True)
             )
         
         if not success:
@@ -291,6 +297,76 @@ class DatabaseManager:
             self.engine = None
             return False
     
+    def connect_dremio(self, host: str, port: int, username: str, password: str, ssl: bool = True) -> bool:
+        """Connect to Dremio database with enhanced security and reliability."""
+        try:
+            # Validate inputs
+            if not all([host, port, username]):
+                logger.error("Missing required Dremio connection parameters")
+                return False
+            
+            # Dremio supports PostgreSQL wire protocol
+            from urllib.parse import quote_plus
+            encoded_password = quote_plus(password) if password else ""
+            
+            # Dremio uses PostgreSQL protocol but connects to a virtual database
+            connection_string = (
+                f"postgresql://{username}:{encoded_password}@{host}:{port}/dremio"
+                f"?sslmode={'require' if ssl else 'disable'}"
+                f"&application_name=database-ontology-mcp"
+            )
+            
+            logger.info(f"Connecting to Dremio at {host}:{port} (SSL: {ssl})")
+            self.engine = create_engine(
+                connection_string,
+                poolclass=QueuePool,
+                pool_size=self._connection_pool_size,
+                max_overflow=self._max_overflow,
+                pool_timeout=CONNECTION_TIMEOUT,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+                echo=False,
+                connect_args={
+                    "timeout": CONNECTION_TIMEOUT,
+                    "application_name": "database-ontology-mcp"
+                }
+            )
+            self.metadata = MetaData()
+            self.connection_info = {
+                "type": "dremio",
+                "host": host,
+                "port": port,
+                "username": username,
+                "ssl": ssl
+            }
+            
+            # Store connection parameters for reconnection
+            self._last_connection_params = {
+                "type": "dremio",
+                "host": host,
+                "port": port,
+                "username": username,
+                "password": password,
+                "ssl": ssl
+            }
+            
+            # Test connection with timeout
+            with self.engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
+            
+            logger.info(f"Connected to Dremio database at {host}:{port}")
+            return True
+            
+        except (SQLAlchemyError, OperationalError, DatabaseError) as e:
+            logger.error(f"Failed to connect to Dremio {host}:{port}: {type(e).__name__}: {e}")
+            self.engine = None
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to Dremio: {type(e).__name__}: {e}")
+            self.engine = None
+            return False
+    
     def get_schemas(self) -> List[str]:
         """Get list of available schemas."""
         if not self.engine:
@@ -299,22 +375,20 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 # Use proper parameterized query for schema filtering
-                if self.connection_info.get("type") == "snowflake":
+                db_type = self.connection_info.get("type")
+                if db_type == "snowflake":
                     excluded_schemas = "', '".join(SNOWFLAKE_SYSTEM_SCHEMAS)
-                    query = text(f"""
-                        SELECT schema_name 
-                        FROM information_schema.schemata 
-                        WHERE schema_name NOT IN ('{excluded_schemas}')
-                        ORDER BY schema_name
-                    """)
-                else:
+                elif db_type == "dremio":
+                    excluded_schemas = "', '".join(DREMIO_SYSTEM_SCHEMAS)
+                else:  # postgresql
                     excluded_schemas = "', '".join(POSTGRES_SYSTEM_SCHEMAS)
-                    query = text(f"""
-                        SELECT schema_name 
-                        FROM information_schema.schemata 
-                        WHERE schema_name NOT IN ('{excluded_schemas}')
-                        ORDER BY schema_name
-                    """)
+                
+                query = text(f"""
+                    SELECT schema_name 
+                    FROM information_schema.schemata 
+                    WHERE schema_name NOT IN ('{excluded_schemas}')
+                    ORDER BY schema_name
+                """)
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -454,9 +528,13 @@ class DatabaseManager:
                         
                         # Get 10 random sample rows
                         if row_count and row_count > 0:
-                            if self.connection_info.get("type") == "snowflake":
+                            db_type = self.connection_info.get("type")
+                            if db_type == "snowflake":
                                 # Snowflake uses SAMPLE for random sampling
                                 sample_query = text(f'SELECT * FROM {full_table_name} SAMPLE (10 ROWS) LIMIT 10')
+                            elif db_type == "dremio":
+                                # Dremio doesn't support TABLESAMPLE or RANDOM(), use simple LIMIT
+                                sample_query = text(f'SELECT * FROM {full_table_name} LIMIT 10')
                             else:
                                 # PostgreSQL uses ORDER BY RANDOM() for random sampling
                                 sample_query = text(f'SELECT * FROM {full_table_name} ORDER BY RANDOM() LIMIT 10')
@@ -772,6 +850,28 @@ class DatabaseManager:
                                 validation_result["suggestions"].append("SQL compilation failed - review syntax and object references")
                             elif "invalid identifier" in error_msg.lower():
                                 validation_result["suggestions"].append("Invalid identifier - check column names and use double quotes for case-sensitive names")
+                    
+                    elif self.connection_info.get("type") == "dremio":
+                        # Dremio: Use EXPLAIN to validate syntax
+                        explain_sql = f"EXPLAIN PLAN FOR {query_stripped}"
+                        try:
+                            result = conn.execute(text(explain_sql))
+                            result.fetchall()  # Consume the explain plan
+                            validation_result["is_valid"] = True
+                        except Exception as explain_error:
+                            # Extract meaningful error from Dremio
+                            error_msg = str(explain_error)
+                            validation_result["database_error"] = error_msg
+                            validation_result["error"] = f"Dremio syntax error: {error_msg}"
+                            validation_result["error_type"] = "syntax_error"
+                            
+                            # Add suggestions based on common Dremio errors
+                            if "not found" in error_msg.lower() or "does not exist" in error_msg.lower():
+                                validation_result["suggestions"].append("Object not found - check table/view names and ensure proper qualification")
+                            elif "syntax error" in error_msg.lower():
+                                validation_result["suggestions"].append("SQL syntax error - review query structure and keywords")
+                            elif "validation error" in error_msg.lower():
+                                validation_result["suggestions"].append("Query validation failed - check column references and data types")
                     
                     # Step 3: Extract table references if validation succeeded
                     if validation_result["is_valid"]:

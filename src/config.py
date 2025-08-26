@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-from .constants import DEFAULT_BASE_URI, DEFAULT_POSTGRES_PORT, DEFAULT_SNOWFLAKE_SCHEMA
+from .constants import DEFAULT_BASE_URI, DEFAULT_POSTGRES_PORT, DEFAULT_SNOWFLAKE_SCHEMA, DEFAULT_DREMIO_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,12 @@ class DatabaseConfig:
     snowflake_database: Optional[str] = None
     snowflake_schema: str = DEFAULT_SNOWFLAKE_SCHEMA
     snowflake_role: str = "PUBLIC"
+    
+    # Dremio settings
+    dremio_host: Optional[str] = None
+    dremio_port: int = DEFAULT_DREMIO_PORT
+    dremio_username: Optional[str] = None
+    dremio_password: Optional[str] = None
 
 
 class ConfigManager:
@@ -79,7 +85,11 @@ class ConfigManager:
                 snowflake_warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
                 snowflake_database=os.getenv("SNOWFLAKE_DATABASE"),
                 snowflake_schema=os.getenv("SNOWFLAKE_SCHEMA", DEFAULT_SNOWFLAKE_SCHEMA),
-                snowflake_role=os.getenv("SNOWFLAKE_ROLE", "PUBLIC")
+                snowflake_role=os.getenv("SNOWFLAKE_ROLE", "PUBLIC"),
+                dremio_host=os.getenv("DREMIO_HOST"),
+                dremio_port=int(os.getenv("DREMIO_PORT", DEFAULT_DREMIO_PORT)),
+                dremio_username=os.getenv("DREMIO_USERNAME"),
+                dremio_password=os.getenv("DREMIO_PASSWORD")
             )
             logger.info("Database configuration loaded")
         return self._db_config
@@ -104,6 +114,13 @@ class ConfigManager:
                 "password": config.snowflake_password,
                 "warehouse": config.snowflake_warehouse,
                 "database": config.snowflake_database
+            }
+        elif db_type == "dremio":
+            required_fields = {
+                "host": config.dremio_host,
+                "port": config.dremio_port,
+                "username": config.dremio_username,
+                "password": config.dremio_password
             }
         else:
             raise ValueError(f"Unsupported database type: {db_type}")

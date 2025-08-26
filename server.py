@@ -37,7 +37,7 @@ def print_startup_info():
     
     logger.info("🔧 Available MCP Tools:")
     tools = [
-        "connect_database - Connect to PostgreSQL or Snowflake with security",
+        "connect_database - Connect to PostgreSQL, Snowflake, or Dremio with security",
         "list_schemas - List available database schemas",
         "analyze_schema - Parallel analysis of tables and columns", 
         "generate_ontology - Generate RDF ontology with validation",
@@ -51,7 +51,7 @@ def print_startup_info():
         logger.info(f"  • {tool}")
     
     logger.info("")
-    logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake")
+    logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake, Dremio")
     logger.info("🧠 LLM Enrichment: Available via MCP prompts and tools")
     logger.info("🔒 Security: Credential handling and input validation")
     logger.info("⚡ Performance: Connection pooling and parallel processing")

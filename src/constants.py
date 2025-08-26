@@ -3,6 +3,7 @@
 # Database connection constants
 DEFAULT_POSTGRES_PORT = 5432
 DEFAULT_SNOWFLAKE_SCHEMA = "PUBLIC"
+DEFAULT_DREMIO_PORT = 31010
 
 # Data sampling limits
 MIN_SAMPLE_LIMIT = 1
@@ -23,8 +24,9 @@ ONTOLOGY_DESCRIPTION = "Ontology generated from database schema"
 IDENTIFIER_PATTERN = r'^[a-zA-Z_][a-zA-Z0-9_-]*$'
 
 # Supported database types
-SUPPORTED_DB_TYPES = ["postgresql", "snowflake"]
+SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "dremio"]
 
 # System schemas to exclude
 POSTGRES_SYSTEM_SCHEMAS = ["information_schema", "pg_catalog", "pg_toast"]
 SNOWFLAKE_SYSTEM_SCHEMAS = ["INFORMATION_SCHEMA", "SNOWFLAKE", "SNOWFLAKE_SAMPLE_DATA"]
+DREMIO_SYSTEM_SCHEMAS = ["INFORMATION_SCHEMA", "sys"]
