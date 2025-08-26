@@ -24,6 +24,7 @@ def connect_database(
     ssl: Optional[bool] = False
 ) -> Dict[str, Any]:
     """Connect to database implementation. Full documentation in main.py."""
+    logger.info(f"Connection requested - db_type: {db_type}, host: {host}, port: {port}, ssl: {ssl}")
     try:
         db_manager = get_db_manager()
         db_config = config_manager.get_database_config()
@@ -82,15 +83,18 @@ def connect_database(
             )
         
         if success:
+            logger.info(f"Successfully connected to {db_type} database")
             return {
                 "success": True,
                 "message": f"Successfully connected to {db_type} database",
                 "connection_info": db_manager.connection_info
             }
         else:
+            logger.error(f"Connection to {db_type} database returned False - no specific error")
             return create_error_response(
                 f"Failed to connect to {db_type} database",
-                "connection_error"
+                "connection_error",
+                "Connection attempt returned False without specific error"
             )
             
     except Exception as e:
