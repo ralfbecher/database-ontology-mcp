@@ -9,25 +9,20 @@ Main tool: get_analysis_context() - provides complete schema analysis with integ
 import logging
 import shutil
 from pathlib import Path
+from typing import Dict, List, Optional, Any
 
 from fastmcp import FastMCP
+import mcp.types as types
 from .config import config_manager
 from . import __version__, __name__ as SERVER_NAME, __description__
 
-# Import all tools from the tools package
-from .tools import (
-    connect_database,
-    diagnose_connection_issue,
-    list_schemas,
-    get_analysis_context,
-    sample_table_data,
-    generate_ontology,
-    load_ontology_from_file,
-    validate_sql_syntax,
-    execute_sql_query,
-    generate_chart,
-    get_server_info
-)
+# Import tool implementations from modules
+from .tools import connection as conn_tools
+from .tools import schema as schema_tools
+from .tools import ontology as ontology_tools
+from .tools import query as query_tools
+from .tools import chart as chart_tools
+from .tools import info as info_tools
 
 # Initialize configuration and logging
 server_config = config_manager.get_server_config()
@@ -54,18 +49,316 @@ setup_tmp_directory()
 # Initialize FastMCP
 mcp = FastMCP(SERVER_NAME)
 
-# Register all tools with MCP
-mcp.tool()(connect_database)
-mcp.tool()(diagnose_connection_issue)
-mcp.tool()(list_schemas)
-mcp.tool()(get_analysis_context)
-mcp.tool()(sample_table_data)
-mcp.tool()(generate_ontology)
-mcp.tool()(load_ontology_from_file)
-mcp.tool()(validate_sql_syntax)
-mcp.tool()(execute_sql_query)
-mcp.tool()(generate_chart)
-mcp.tool()(get_server_info)
+# =============================================================================
+# MCP TOOLS - Decorated functions that delegate to tool modules
+# =============================================================================
+
+@mcp.tool()
+def connect_database(
+    db_type: str,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    database: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    account: Optional[str] = None,
+    warehouse: Optional[str] = None,
+    schema: Optional[str] = "PUBLIC",
+    role: Optional[str] = None,
+    ssl: Optional[bool] = True
+) -> Dict[str, Any]:
+    """Connect to a PostgreSQL, Snowflake, or Dremio database.
+    
+    Parameters are optional - the tool will automatically use values from .env file when parameters are not provided.
+    
+    Args:
+        db_type: Database type ("postgresql", "snowflake", or "dremio")
+        host: Database host (PostgreSQL/Dremio, uses POSTGRES_HOST or DREMIO_HOST from .env if not provided)
+        port: Database port (PostgreSQL/Dremio, uses POSTGRES_PORT or DREMIO_PORT from .env if not provided) 
+        database: Database name (uses POSTGRES_DATABASE or SNOWFLAKE_DATABASE from .env if not provided)
+        username: Username for authentication (uses POSTGRES_USERNAME, SNOWFLAKE_USERNAME, or DREMIO_USERNAME from .env if not provided)
+        password: Password for authentication (uses POSTGRES_PASSWORD, SNOWFLAKE_PASSWORD, or DREMIO_PASSWORD from .env if not provided)
+        account: Snowflake account identifier (Snowflake only, uses SNOWFLAKE_ACCOUNT from .env if not provided)
+        warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
+        schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
+        role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
+        ssl: Enable SSL connection (Dremio only, default: True)
+    
+    Returns:
+        Connection status information or error response
+        
+    Examples:
+        # Connect using .env file values
+        connect_database("postgresql")
+        connect_database("snowflake")
+        connect_database("dremio")
+        
+        # Override specific parameters
+        connect_database("postgresql", host="custom.host.com", port=5433)
+        connect_database("dremio", host="dremio.company.com", port=31010, ssl=False)
+    """
+    return conn_tools.connect_database(db_type, host, port, database, username, password, account, warehouse, schema, role, ssl)
+
+
+@mcp.tool()
+def diagnose_connection_issue(
+    db_type: str,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    username: Optional[str] = None,
+    ssl: Optional[bool] = None
+) -> Dict[str, Any]:
+    """Diagnose connection issues and provide comprehensive troubleshooting guidance.
+    
+    This tool provides detailed connection diagnostics with specific recommendations
+    for fixing common database connection problems. Includes connection testing steps,
+    common issues, and detailed troubleshooting guidance.
+    
+    Args:
+        db_type: Database type ("postgresql", "snowflake", or "dremio")
+        host: Database host (optional, will use config if not provided)
+        port: Database port (optional, will use config/default if not provided) 
+        username: Username (optional, will use config if not provided)
+        ssl: SSL setting for Dremio (optional, defaults to True)
+    
+    Returns:
+        Comprehensive diagnostic information with troubleshooting recommendations
+    """
+    return conn_tools.diagnose_connection_issue(db_type, host, port, username, ssl)
+
+
+@mcp.tool()
+def list_schemas() -> Dict[str, Any]:
+    """Get a list of available schemas from the connected database.
+    
+    Returns:
+        List of schema names or error response
+    """
+    return schema_tools.list_schemas()
+
+
+@mcp.tool()
+def get_analysis_context(
+    schema_name: Optional[str] = None,
+    include_ontology: bool = True
+) -> Dict[str, Any]:
+    """🌟 MAIN TOOL: Get comprehensive analysis context for data exploration and SQL generation.
+    
+    This is the primary tool for database analysis. It provides everything needed in one call:
+    - Complete schema structure (tables, columns, relationships)  
+    - Automatic ontology generation with SQL references
+    - Ready-to-use JOIN conditions and column references
+    - Relationship warnings for safe aggregations
+    - SQL generation hints and best practices
+    
+    Args:
+        schema_name: Name of the schema to analyze (optional)
+        include_ontology: Whether to generate ontology (default: True, recommended)
+    
+    Returns:
+        Dictionary containing complete analysis context with schema and ontology data
+    """
+    return schema_tools.get_analysis_context(schema_name, include_ontology)
+
+
+@mcp.tool()
+def sample_table_data(
+    table_name: str,
+    schema_name: Optional[str] = None,
+    limit: int = 10
+) -> Dict[str, Any]:
+    """Sample data from a specific table for exploration and analysis.
+    
+    Args:
+        table_name: Name of the table to sample
+        schema_name: Name of the schema containing the table (optional)
+        limit: Maximum number of rows to return (default: 10, max: 1000)
+    
+    Returns:
+        List of dictionaries representing sample rows or error response
+    """
+    return schema_tools.sample_table_data(table_name, schema_name, limit)
+
+
+@mcp.tool()
+def generate_ontology(
+    schema_name: Optional[str] = None,
+    base_uri: Optional[str] = None,
+    enrich_llm: bool = False
+) -> str:
+    """Generate a database ontology with direct SQL generation support.
+    
+    ℹ️  Most users should use get_analysis_context() instead, which includes ontology automatically.
+    
+    This tool generates a comprehensive ontology containing:
+    - Direct database table/column references (customers.customer_id)
+    - Ready-to-use JOIN conditions (orders.customer_id = customers.customer_id)
+    - Business-friendly descriptions for understanding data meaning
+    - Complete metadata (data types, constraints, row counts)
+    
+    Args:
+        schema_name: Name of the schema to generate ontology from (optional)
+        base_uri: Base URI for the ontology (optional, uses config default)
+        enrich_llm: Whether to enrich the ontology with LLM insights (default: False)
+    
+    Returns:
+        RDF ontology in Turtle format with complete database mappings
+    """
+    return ontology_tools.generate_ontology(schema_name, base_uri, enrich_llm)
+
+
+@mcp.tool()
+def load_ontology_from_file(
+    file_path: str
+) -> Dict[str, Any]:
+    """Load a previously saved or user-edited ontology from the tmp folder.
+    
+    This tool allows loading ontologies that were:
+    - Previously generated and saved by get_analysis_context()  
+    - Manually edited by users for enhanced analytical context
+    - Created externally and placed in the tmp folder
+    
+    Args:
+        file_path: Path to the ontology file (.ttl format)
+                  Can be absolute path or relative to tmp folder
+    
+    Returns:
+        Dictionary containing the loaded ontology content and metadata
+        
+    Examples:
+        # Load a previously saved ontology
+        load_ontology_from_file("ontology_public_20240826_143022.ttl")
+        
+        # Load with full path
+        load_ontology_from_file("/path/to/tmp/ontology_custom.ttl")
+    """
+    return ontology_tools.load_ontology_from_file(file_path)
+
+
+@mcp.tool()
+def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
+    """Validate SQL query syntax using database-level validation.
+    
+    Uses the database's own SQL parser to provide accurate syntax validation
+    and meaningful error messages for query correction.
+    
+    Args:
+        sql_query: SQL query to validate
+        
+    Returns:
+        Dictionary with validation results including any errors and suggestions
+    """
+    return query_tools.validate_sql_syntax(sql_query)
+
+
+@mcp.tool()
+def execute_sql_query(
+    sql_query: str, 
+    limit: int = 1000
+) -> Dict[str, Any]:
+    """Execute a validated SQL query and return results safely.
+    
+    ## 🚀 **WORKFLOW** (Only 4 Steps):
+
+    1. **Connect**: Use `connect_database()` to establish connection
+    2. **Analyze**: Use `get_analysis_context()` - gets schema + ontology + relationships automatically
+    3. **Validate**: Use `validate_sql_syntax()` before execution  
+    4. **Execute**: Use `execute_sql_query()` to run validated queries
+
+    ## 🎯 **Using the Ontology for Accurate SQL**:
+    The `get_analysis_context()` tool provides an ontology containing:
+    - **Ready-to-use SQL column references**: `customers.customer_id`, `orders.order_total`
+    - **Complete JOIN conditions**: `orders.customer_id = customers.customer_id`
+    - **Business context**: "Customer information and profile data"
+    
+    Extract these from the ontology TTL format and use them directly in your SQL queries.
+
+    ## Security Restrictions
+
+    **ALLOWED:**
+    - SELECT statements
+    - Common Table Expressions (WITH)
+    - EXPLAIN statements
+    - Database metadata queries
+
+    **PROHIBITED:**
+    - INSERT, UPDATE, DELETE statements
+    - DDL operations (CREATE, DROP, ALTER)
+    - Transaction control (COMMIT, ROLLBACK)
+    - System functions that modify state
+    - Dynamic SQL execution
+
+    Args:
+        sql_query: SQL query to execute (must pass validation first)
+        limit: Maximum number of rows to return (default: 1000, max: 5000)
+        
+    Returns:
+        Dictionary with query results and execution metadata
+    """
+    return query_tools.execute_sql_query(sql_query, limit)
+
+
+@mcp.tool()
+def generate_chart(
+    data_source: List[Dict[str, Any]],
+    chart_type: str,
+    x_column: str,
+    y_column: Optional[str] = None,
+    color_column: Optional[str] = None,
+    title: Optional[str] = None,
+    chart_library: str = "matplotlib",
+    chart_style: str = "grouped",
+    width: int = 800,
+    height: int = 600
+) -> list[types.ContentBlock]:
+    """Generate interactive charts from SQL query result data.
+    
+    📊 Supports multiple chart types with both Plotly (interactive) and Matplotlib/Seaborn (static) backends.
+    
+    Args:
+        data_source: List of dictionaries containing query results (from execute_sql_query)
+        chart_type: Type of chart ("bar", "line", "scatter", "heatmap")
+        x_column: Column name for X-axis
+        y_column: Column name for Y-axis (required for most chart types)
+        color_column: Column name for color grouping (optional)
+        title: Chart title (auto-generated if not provided)
+        chart_library: Library to use ("plotly" or "matplotlib")
+        chart_style: Chart style ("grouped", "stacked" for bar charts)
+        width: Chart width in pixels
+        height: Chart height in pixels
+    
+    Chart Types:
+        - "bar": Bar chart for discrete dimensions (supports grouped/stacked)
+        - "line": Line chart, especially good for time series
+        - "scatter": Scatter plot for correlation analysis
+        - "heatmap": Heatmap for correlation matrices or pivot data
+    
+    Returns:
+        MCP ContentBlock list with chart image for Claude Desktop display
+        
+    Examples:
+        # First get data with execute_sql_query, then create chart
+        query_results = execute_sql_query("SELECT category, sales_amount FROM sales")
+        generate_chart(
+            data_source=query_results["data"],
+            chart_type="bar",
+            x_column="category",
+            y_column="sales_amount",
+            title="Sales by Category"
+        )
+    """
+    return chart_tools.generate_chart(data_source, chart_type, x_column, y_column, color_column, title, chart_library, chart_style, width, height)
+
+
+@mcp.tool()
+def get_server_info() -> Dict[str, Any]:
+    """Get information about the Database Ontology MCP server and its capabilities.
+    
+    Returns:
+        Dictionary containing server information and available tools
+    """
+    return info_tools.get_server_info()
+
 
 if __name__ == "__main__":
     logger.info(f"Starting {SERVER_NAME} v{__version__}")
