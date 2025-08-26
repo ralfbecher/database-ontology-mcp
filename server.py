@@ -38,13 +38,15 @@ def print_startup_info():
     logger.info("🔧 Available MCP Tools:")
     tools = [
         "connect_database - Connect to PostgreSQL, Snowflake, or Dremio with security",
+        "diagnose_connection_issue - Diagnose and troubleshoot connection problems",
         "list_schemas - List available database schemas",
-        "analyze_schema - Parallel analysis of tables and columns", 
-        "generate_ontology - Generate RDF ontology with validation",
+        "get_analysis_context - Complete schema analysis with automatic ontology generation", 
         "sample_table_data - Sample table data with security controls",
-        "get_table_relationships - Analyze foreign key relationships",
-        "get_enrichment_data - Prepare data for LLM enrichment",
-        "apply_ontology_enrichment - Apply LLM suggestions to ontology",
+        "generate_ontology - Generate RDF ontology with validation",
+        "load_ontology_from_file - Load saved/edited ontology from tmp folder",
+        "validate_sql_syntax - Validate SQL queries before execution",
+        "execute_sql_query - Execute validated SQL queries safely",
+        "generate_chart - Generate interactive charts from query results",
         "get_server_info - Get comprehensive server information"
     ]
     for tool in tools:

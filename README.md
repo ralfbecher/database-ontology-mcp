@@ -175,7 +175,7 @@ sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
 database-ontology-mcp/
 ├── src/
 │   ├── __init__.py                 # Package initialization
-│   ├── main.py                     # Streamlined FastMCP server (8 tools, 623 lines)
+│   ├── main.py                     # FastMCP server entry point (11 tools, 106 lines)
 │   ├── main_original.py            # Backup of previous complex version (2143 lines)
 │   ├── main_backup.py              # Additional backup
 │   ├── database_manager.py         # Database connection and analysis
@@ -506,7 +506,7 @@ I need to analyze the database. Please use get_analysis_context to provide a com
 - Manual steps required for semantic context
 - Tool dependencies created workflow issues
 
-**Now (Streamlined Version)**:
+**Now (Refactored Version)**:
 
 - 8 essential tools, crystal clear purpose
 - Main tool automatically includes ontology
