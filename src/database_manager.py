@@ -63,6 +63,7 @@ class DatabaseManager:
         self._connection_pool_size = 5
         self._max_overflow = 10
         self._last_connection_params: Optional[Dict[str, Any]] = None
+        self._dremio_rest_connection: Optional[Dict[str, Any]] = None
         
     def _test_connection(self) -> bool:
         """Test if the current connection is healthy."""
@@ -297,73 +298,83 @@ class DatabaseManager:
             self.engine = None
             return False
     
-    def connect_dremio(self, host: str, port: int, username: str, password: str, ssl: bool = True) -> bool:
-        """Connect to Dremio database with enhanced security and reliability."""
+    def connect_dremio(self, host: str, port: int, username: str, password: str, ssl: bool = False) -> bool:
+        """Connect to Dremio using REST API instead of PostgreSQL protocol."""
         try:
             # Validate inputs
-            if not all([host, port, username]):
+            if not all([host, username]):
                 logger.error("Missing required Dremio connection parameters")
                 return False
             
-            # Dremio supports PostgreSQL wire protocol
-            from urllib.parse import quote_plus
-            encoded_password = quote_plus(password) if password else ""
+            # Import the Dremio client
+            import asyncio
+            from .dremio_client import create_dremio_client
             
-            # Dremio uses PostgreSQL protocol but connects to a virtual database
-            connection_string = (
-                f"postgresql://{username}:{encoded_password}@{host}:{port}/dremio"
-                f"?sslmode={'require' if ssl else 'disable'}"
-                f"&application_name=database-ontology-mcp"
-            )
+            # For Dremio, we use port 9047 for REST API, not the provided port
+            api_port = 9047
+            logger.info(f"Connecting to Dremio REST API at {host}:{api_port} (SSL: {ssl})")
             
-            logger.info(f"Connecting to Dremio at {host}:{port} (SSL: {ssl})")
-            self.engine = create_engine(
-                connection_string,
-                poolclass=QueuePool,
-                pool_size=self._connection_pool_size,
-                max_overflow=self._max_overflow,
-                pool_timeout=CONNECTION_TIMEOUT,
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                echo=False,
-                connect_args={
-                    "timeout": CONNECTION_TIMEOUT,
-                    "application_name": "database-ontology-mcp"
-                }
-            )
-            self.metadata = MetaData()
+            # Create and test Dremio client connection
+            async def test_dremio_connection():
+                async with await create_dremio_client(
+                    host=host, 
+                    port=api_port, 
+                    username=username, 
+                    password=password, 
+                    ssl=ssl
+                ) as client:
+                    return await client.test_connection()
+            
+            # Run the async connection test
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                connection_result = loop.run_until_complete(test_dremio_connection())
+            finally:
+                loop.close()
+            
+            if not connection_result.get("success"):
+                logger.error(f"Dremio connection test failed: {connection_result.get('error')}")
+                return False
+            
+            # Store connection info for Dremio REST API
             self.connection_info = {
                 "type": "dremio",
                 "host": host,
-                "port": port,
+                "port": api_port,
                 "username": username,
-                "ssl": ssl
+                "ssl": ssl,
+                "api": "REST"
             }
             
             # Store connection parameters for reconnection
             self._last_connection_params = {
                 "type": "dremio",
                 "host": host,
-                "port": port,
+                "port": port,  # Original port for compatibility
                 "username": username,
                 "password": password,
                 "ssl": ssl
             }
             
-            # Test connection with timeout
-            with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
+            # Set a special flag to indicate this is a Dremio REST connection
+            self._dremio_rest_connection = {
+                "host": host,
+                "port": api_port,
+                "username": username,
+                "password": password,
+                "ssl": ssl
+            }
             
-            logger.info(f"Connected to Dremio database at {host}:{port}")
+            # Don't set self.engine for Dremio REST API connections
+            self.engine = None
+            self.metadata = None
+            
+            logger.info(f"Connected to Dremio via REST API at {host}:{api_port}")
             return True
             
-        except (SQLAlchemyError, OperationalError, DatabaseError) as e:
-            logger.error(f"Failed to connect to Dremio {host}:{port}: {type(e).__name__}: {e}")
-            self.engine = None
-            return False
         except Exception as e:
-            logger.error(f"Unexpected error connecting to Dremio: {type(e).__name__}: {e}")
+            logger.error(f"Failed to connect to Dremio: {type(e).__name__}: {e}")
             self.engine = None
             return False
     
@@ -915,6 +926,10 @@ class DatabaseManager:
         Returns:
             Dictionary with query results and execution metadata
         """
+        # Handle Dremio REST API connection
+        if self._dremio_rest_connection:
+            return self._execute_dremio_query(sql_query, limit)
+        
         if not self.engine:
             raise RuntimeError("No database connection established")
         
@@ -1022,8 +1037,82 @@ class DatabaseManager:
             
         return result_data
     
+    def _execute_dremio_query(self, sql_query: str, limit: int = 1000) -> Dict[str, Any]:
+        """Execute SQL query using Dremio REST API."""
+        import asyncio
+        import time
+        from .dremio_client import create_dremio_client
+        
+        result_data = {
+            "success": False,
+            "data": [],
+            "columns": [],
+            "row_count": 0,
+            "execution_time_ms": None,
+            "error": None,
+            "error_type": None,
+            "warnings": [],
+            "limit_applied": False
+        }
+        
+        try:
+            start_time = time.time()
+            
+            # Get Dremio connection parameters
+            dremio_params = self._dremio_rest_connection
+            
+            async def run_dremio_query():
+                async with await create_dremio_client(
+                    host=dremio_params["host"],
+                    port=dremio_params["port"], 
+                    username=dremio_params["username"],
+                    password=dremio_params["password"],
+                    ssl=dremio_params["ssl"]
+                ) as client:
+                    return await client.execute_query(sql_query, limit)
+            
+            # Run the async query
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                query_result = loop.run_until_complete(run_dremio_query())
+            finally:
+                loop.close()
+            
+            execution_time = (time.time() - start_time) * 1000
+            result_data["execution_time_ms"] = execution_time
+            
+            if query_result.get("success"):
+                result_data["success"] = True
+                result_data["data"] = query_result.get("data", [])
+                result_data["columns"] = query_result.get("columns", [])
+                result_data["row_count"] = query_result.get("row_count", 0)
+                
+                # Check if limit was applied
+                total_rows = query_result.get("total_rows", result_data["row_count"])
+                if total_rows > limit:
+                    result_data["limit_applied"] = True
+                    result_data["warnings"].append(f"Results limited to {limit} rows (total: {total_rows})")
+                
+                logger.info(f"Dremio query executed successfully: {result_data['row_count']} rows in {execution_time:.2f}ms")
+            else:
+                result_data["error"] = query_result.get("error", "Unknown Dremio error")
+                result_data["error_type"] = query_result.get("error_type", "dremio_error")
+                logger.error(f"Dremio query failed: {result_data['error']}")
+            
+        except Exception as e:
+            result_data["error"] = f"Dremio execution error: {str(e)}"
+            result_data["error_type"] = "dremio_connection_error"
+            logger.error(f"Dremio query execution failed: {e}")
+        
+        return result_data
+    
     def has_engine(self) -> bool:
-        """Check if database engine exists (basic connection check)."""
+        """Check if database connection exists (engine for SQL databases, REST client for Dremio)."""
+        # For Dremio REST API, check if connection info is available
+        if self._dremio_rest_connection:
+            return True
+        # For traditional SQL databases, check engine
         return self.engine is not None
     
     def restore_connection_if_needed(self) -> bool:
