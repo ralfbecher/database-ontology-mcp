@@ -6,13 +6,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.10+-blue)](https://github.com/jlowin/fastmcp)
 
-This project provides a focused, production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
+This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
 
 ## Key Philosophy: Automatic Ontology Integration
 
-**Problem Solved**: Claude Desktop often ignores ontology generation tools during analytical sessions, treating them as optional rather than essential.
-
-**Solution**: Our main analysis tool `get_analysis_context()` automatically includes ontology generation, making semantic context readily available for every query.
+Our main analysis tool `get_analysis_context()` automatically includes ontology generation, making semantic context readily available for every query.
 
 ## 🌟 Key Features
 
@@ -52,7 +50,7 @@ This project provides a focused, production-ready Python-based MCP (Model Contex
 - **Comprehensive error handling** with structured responses
 - **Production-ready logging** and monitoring
 
-## 📦 Python Library Installation
+## Python Library Installation
 
 ### Required Dependencies
 
@@ -171,7 +169,7 @@ sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
 - Most dependencies work out of the box with pip
 - For PostgreSQL support, ensure PostgreSQL client libraries are installed
 
-## 🏗️ Streamlined Project Structure
+## Project Structure
 
 ```
 database-ontology-mcp/
@@ -217,7 +215,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 3. **Install all dependencies:**
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 **Note**: The charting functionality requires visualization libraries (pandas, plotly, matplotlib, seaborn). These are included in `requirements.txt` and will be installed automatically in your virtual environment.
@@ -284,36 +282,10 @@ DREMIO_PASSWORD=your_password
 
 ```bash
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-python run_server.py
+python server.py
 ```
 
-The server will start with streamlined tool output:
-
-```
-================================================================
-Database Ontology MCP Server - Streamlined Edition
-8 Essential Tools for Maximum Effectiveness
-================================================================
-
-🔧 Streamlined MCP Tools (8 Essential):
-  1. connect_database      - Connect to PostgreSQL/Snowflake (uses .env fallback)
-  2. list_schemas         - List available database schemas
-  3. get_analysis_context - 🌟 MAIN TOOL: Complete analysis + automatic ontology
-  4. generate_ontology    - Manual ontology generation (fallback)
-  5. sample_table_data    - Secure data sampling with validation
-  6. validate_sql_syntax  - SQL validation with fan-trap detection
-  7. execute_sql_query    - Safe SQL execution with comprehensive warnings
-  8. get_server_info      - Server status and configuration
-
-🎯 Key Improvement: Main analysis tool now includes automatic ontology generation!
-📊 Result: Claude Desktop gets semantic context automatically, no manual ontology steps needed.
-🔒 Safety: Comprehensive fan-trap detection prevents query result multiplication.
-
-🚀 Starting MCP server with HTTP streamable transport...
-📡 Server ready and listening on port 8123 for HTTP MCP protocol messages
-```
-
-## 🔗 Claude Desktop Integration
+## Claude Desktop Integration
 
 Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
 
@@ -338,9 +310,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 python server.py
 ```
 
-## 🛠️ MCP Tools Reference
+## MCP Tools Reference
 
-### 🌟 Main Tool: `get_analysis_context`
+### Main Tool: `get_analysis_context`
 
 The primary tool that provides complete database analysis with automatic ontology generation.
 
@@ -425,7 +397,7 @@ Get available database schemas.
 
 **Returns:** `Array<string>` of schema names
 
-#### 3. `generate_ontology` (Fallback Tool)
+#### 3. `generate_ontology`
 
 Manual ontology generation when you need specific control.
 
@@ -648,8 +620,7 @@ else:
 **Account Format Problems**:
 
 - Check your Snowflake web UI URL
-- Common formats: `ORGNAME-ACCOUNT`, `ACCOUNT.REGION`, `ACCOUNT.REGION.CLOUD`
-- Try: `CLYKFLK-KA74251`, `KA74251.us-east-1.aws`
+- Account format: `ORGNAME-ACCOUNT`
 
 **Role and Permissions**:
 
@@ -666,37 +637,11 @@ else:
 - Confirm credentials and database name
 - Test with psql command line first
 
-### Chart Creation Issues
-
-**"Missing required visualization libraries" Error**:
-
-This means the charting libraries aren't installed. **Solution**:
-
-1. **Activate your virtual environment**:
-
-   ```bash
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-2. **Install/reinstall requirements**:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Verify installation**:
-
-   ```bash
-   python -c "import pandas, plotly, matplotlib, seaborn; print('✅ All chart libraries available')"
-   ```
-
-4. **Restart the MCP server** with the virtual environment activated
-
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Key areas for improvement:
 
@@ -714,24 +659,4 @@ We welcome contributions! Key areas for improvement:
 5. Run code quality checks
 6. Submit Pull Request
 
-## 🔄 Version History
-
-### Current - Streamlined Edition
-
-- ✨ Reduced from 17+ tools to 8 essential tools (2143→623 lines in main.py)
-- 🎯 Main tool with automatic ontology generation
-- 🛡️ Advanced fan-trap detection and prevention
-- 📦 Complete dependency management with installation guide
-- 🔧 Environment variable fallback for all connection parameters
-- ✅ Production-ready Snowflake support with account format handling
-
-### Previous - Complex Edition (preserved in main_original.py)
-
-- Multiple redundant tools causing confusion
-- Manual ontology generation steps
-- Tool bloat with 17+ separate functions
-- Complex dependencies between tools
-
 ---
-
-**🎯 Built for Maximum Effectiveness: One Main Tool + Automatic Ontology = Better SQL from Business Language**

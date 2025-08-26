@@ -91,7 +91,7 @@ def error_handler(operation_name: str):
         raise
 
 # =============================================================================
-# 🚀 STREAMLINED MCP TOOLS (8 Essential Tools)
+# MCP TOOLS
 # =============================================================================
 
 @mcp.tool()
