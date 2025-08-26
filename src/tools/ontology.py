@@ -7,33 +7,10 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from ..config import config_manager
-from ..database_manager import DatabaseManager
+from ..shared import get_db_manager, create_error_response
 from ..ontology_generator import OntologyGenerator
 
 logger = logging.getLogger(__name__)
-
-# Global database manager instance  
-_db_manager: Optional[DatabaseManager] = None
-
-
-def get_db_manager() -> DatabaseManager:
-    """Get or create the global database manager instance."""
-    global _db_manager
-    if _db_manager is None:
-        _db_manager = DatabaseManager()
-    return _db_manager
-
-
-def create_error_response(message: str, error_type: str, details: str = None) -> Dict[str, Any]:
-    """Create a standardized error response."""
-    error_response = {
-        "success": False,
-        "error": message,
-        "error_type": error_type
-    }
-    if details:
-        error_response["details"] = details
-    return error_response
 
 
 def generate_ontology(

@@ -6,34 +6,12 @@ from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 
 from ..config import config_manager
-from ..database_manager import DatabaseManager, TableInfo, ColumnInfo
+from ..database_manager import TableInfo, ColumnInfo
 from ..ontology_generator import OntologyGenerator
+from ..shared import get_db_manager, create_error_response
 from ..utils import sanitize_for_logging
 
 logger = logging.getLogger(__name__)
-
-# Global database manager instance  
-_db_manager: Optional[DatabaseManager] = None
-
-
-def get_db_manager() -> DatabaseManager:
-    """Get or create the global database manager instance."""
-    global _db_manager
-    if _db_manager is None:
-        _db_manager = DatabaseManager()
-    return _db_manager
-
-
-def create_error_response(message: str, error_type: str, details: str = None) -> Dict[str, Any]:
-    """Create a standardized error response."""
-    error_response = {
-        "success": False,
-        "error": message,
-        "error_type": error_type
-    }
-    if details:
-        error_response["details"] = details
-    return error_response
 
 
 @contextmanager
