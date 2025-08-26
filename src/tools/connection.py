@@ -21,7 +21,7 @@ def connect_database(
     warehouse: Optional[str] = None,
     schema: Optional[str] = "PUBLIC",
     role: Optional[str] = None,
-    ssl: Optional[bool] = True
+    ssl: Optional[bool] = False
 ) -> Dict[str, Any]:
     """Connect to database implementation. Full documentation in main.py."""
     try:
@@ -66,7 +66,7 @@ def connect_database(
             final_port = port or getattr(db_config, 'dremio_port', 31010)
             final_username = username or getattr(db_config, 'dremio_username', None)
             final_password = password or getattr(db_config, 'dremio_password', None)
-            final_ssl = ssl if ssl is not None else True
+            final_ssl = ssl if ssl is not None else False
             
             if not all([final_host, final_port, final_username]):
                 return create_error_response(
@@ -119,7 +119,7 @@ def diagnose_connection_issue(
             actual_port = port or db_config.dremio_port
             actual_username = username or db_config.dremio_username
             actual_password = db_config.dremio_password
-            actual_ssl = ssl if ssl is not None else True
+            actual_ssl = ssl if ssl is not None else False
             
             result = {
                 "db_type": "dremio",
@@ -165,7 +165,7 @@ def diagnose_connection_issue(
             result["recommendations"].extend([
                 "Ensure Dremio coordinator is running and accessible",
                 "Verify port 31010 (default) is not blocked by firewall",
-                "Check if SSL/TLS is required by your Dremio instance",
+                "For production Dremio, check if SSL/TLS is required (use ssl=True)",
                 "Confirm username/password are correct for Dremio",
                 "Try connecting with Dremio's web UI first to verify credentials",
                 "For cloud Dremio, check if IP whitelisting is required"
@@ -177,7 +177,7 @@ def diagnose_connection_issue(
                 "2. Check Dremio web UI is accessible (usually same host, port 9047)",
                 "3. Verify credentials work in Dremio web interface",
                 "4. Check Dremio coordinator logs for connection attempts",
-                "5. Test with SSL disabled if connection fails: ssl=False"
+                "5. For production environments, test with SSL enabled: ssl=True"
             ]
             
             # Common Dremio issues

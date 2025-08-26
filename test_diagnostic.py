@@ -19,7 +19,7 @@ def test_dremio_diagnostic():
     actual_port = db_config.dremio_port
     actual_username = db_config.dremio_username
     actual_password = db_config.dremio_password
-    actual_ssl = True
+    actual_ssl = False  # Default to False for community edition
     
     result = {
         "db_type": "dremio",
@@ -65,7 +65,7 @@ def test_dremio_diagnostic():
     result["recommendations"].extend([
         "Ensure Dremio coordinator is running and accessible",
         "Verify port 31010 (default) is not blocked by firewall",
-        "Check if SSL/TLS is required by your Dremio instance",
+        "For production Dremio, check if SSL/TLS is required (use ssl=True)",
         "Confirm username/password are correct for Dremio",
         "Try connecting with Dremio's web UI first to verify credentials",
         "For cloud Dremio, check if IP whitelisting is required"
@@ -77,7 +77,7 @@ def test_dremio_diagnostic():
         "2. Check Dremio web UI is accessible (usually same host, port 9047)",
         "3. Verify credentials work in Dremio web interface",
         "4. Check Dremio coordinator logs for connection attempts",
-        "5. Test with SSL disabled if connection fails: ssl=False"
+        "5. For production environments, test with SSL enabled: ssl=True"
     ]
     
     # Common Dremio issues

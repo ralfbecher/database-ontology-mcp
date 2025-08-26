@@ -65,7 +65,7 @@ def connect_database(
     warehouse: Optional[str] = None,
     schema: Optional[str] = "PUBLIC",
     role: Optional[str] = None,
-    ssl: Optional[bool] = True
+    ssl: Optional[bool] = False
 ) -> Dict[str, Any]:
     """Connect to a PostgreSQL, Snowflake, or Dremio database.
     
@@ -82,7 +82,7 @@ def connect_database(
         warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
         schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
         role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
-        ssl: Enable SSL connection (Dremio only, default: True)
+        ssl: Enable SSL connection (Dremio only, default: False for community edition compatibility)
     
     Returns:
         Connection status information or error response
@@ -95,7 +95,7 @@ def connect_database(
         
         # Override specific parameters
         connect_database("postgresql", host="custom.host.com", port=5433)
-        connect_database("dremio", host="dremio.company.com", port=31010, ssl=False)
+        connect_database("dremio", host="dremio.company.com", port=31010, ssl=True)  # Enable SSL for production
     """
     return conn_tools.connect_database(db_type, host, port, database, username, password, account, warehouse, schema, role, ssl)
 
@@ -119,7 +119,7 @@ def diagnose_connection_issue(
         host: Database host (optional, will use config if not provided)
         port: Database port (optional, will use config/default if not provided) 
         username: Username (optional, will use config if not provided)
-        ssl: SSL setting for Dremio (optional, defaults to True)
+        ssl: SSL setting for Dremio (optional, defaults to False for community edition)
     
     Returns:
         Comprehensive diagnostic information with troubleshooting recommendations
