@@ -203,6 +203,10 @@ class DatabaseManager:
                 }
             )
             self.metadata = MetaData()
+            
+            # Clear any previous Dremio REST connection state
+            self._dremio_rest_connection = None
+            
             self.connection_info = {
                 "type": "postgresql",
                 "host": host,
@@ -272,6 +276,10 @@ class DatabaseManager:
                 }
             )
             self.metadata = MetaData()
+            
+            # Clear any previous Dremio REST connection state
+            self._dremio_rest_connection = None
+            
             self.connection_info = {
                 "type": "snowflake",
                 "account": account,
@@ -316,6 +324,12 @@ class DatabaseManager:
         """Connect to Dremio using REST API instead of PostgreSQL protocol."""
         logger.info(f"🔍 MCP DEBUG - connect_dremio called with host={host}, port={port}, username={username}, password={'***SET***' if password else 'NOT SET'}, ssl={ssl}, uri={uri}, pat={'***SET***' if pat else 'NOT SET'}")
         try:
+            # Clear any previous SQLAlchemy engine connection state
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+                self.metadata = None
+            
             # Validate inputs - prefer PAT-based authentication
             if uri and pat:
                 logger.info("🔍 MCP DEBUG - Using PAT-based authentication (preferred)")
