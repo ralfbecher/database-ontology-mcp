@@ -1434,22 +1434,36 @@ class DatabaseManager:
             dremio_params = self._dremio_rest_connection
             
             async def run_dremio_query():
-                async with await create_dremio_client(
-                    host=dremio_params["host"],
-                    port=dremio_params["port"], 
-                    username=dremio_params["username"],
-                    password=dremio_params["password"],
-                    ssl=dremio_params["ssl"]
-                ) as client:
-                    return await client.execute_query(sql_query, limit)
+                # Handle both PAT and legacy authentication
+                if dremio_params.get('uri') and dremio_params.get('pat'):
+                    # PAT-based authentication
+                    async with await create_dremio_client(
+                        uri=dremio_params['uri'],
+                        pat=dremio_params['pat']
+                    ) as client:
+                        return await client.execute_query(sql_query, limit)
+                else:
+                    # Legacy authentication
+                    async with await create_dremio_client(
+                        host=dremio_params["host"],
+                        port=dremio_params["port"], 
+                        username=dremio_params["username"],
+                        password=dremio_params["password"],
+                        ssl=dremio_params["ssl"]
+                    ) as client:
+                        return await client.execute_query(sql_query, limit)
             
-            # Run the async query
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Handle async execution in sync context (same pattern as other methods)
             try:
-                query_result = loop.run_until_complete(run_dremio_query())
-            finally:
-                loop.close()
+                loop = asyncio.get_running_loop()
+                # Run in thread if already in async context (MCP server)
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(asyncio.run, run_dremio_query())
+                    query_result = future.result(timeout=60)  # Longer timeout for queries
+            except RuntimeError:
+                # No event loop, create one
+                query_result = asyncio.run(run_dremio_query())
             
             execution_time = (time.time() - start_time) * 1000
             result_data["execution_time_ms"] = execution_time
