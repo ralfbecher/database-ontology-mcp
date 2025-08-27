@@ -12,3 +12,6 @@ wheels/
 
 # Temporary chart files
 tmp/
+
+# Test files in main directory
+test_*.py

@@ -21,10 +21,15 @@ def connect_database(
     warehouse: Optional[str] = None,
     schema: Optional[str] = "PUBLIC",
     role: Optional[str] = None,
-    ssl: Optional[bool] = False
+    ssl: Optional[bool] = False,
+    uri: Optional[str] = None,
+    pat: Optional[str] = None
 ) -> Dict[str, Any]:
     """Connect to database implementation. Full documentation in main.py."""
-    logger.info(f"Connection requested - db_type: {db_type}, host: {host}, port: {port}, ssl: {ssl}")
+    import os
+    logger.info(f"🔍 MCP DEBUG - Connection requested - db_type: {db_type}, host: {host}, port: {port}, ssl: {ssl}")
+    logger.info(f"🔍 MCP DEBUG - Working directory: {os.getcwd()}")
+    logger.info(f"🔍 MCP DEBUG - Environment DREMIO vars: {len([k for k in os.environ.keys() if 'DREMIO' in k.upper()])}")
     try:
         db_manager = get_db_manager()
         db_config = config_manager.get_database_config()
@@ -62,19 +67,35 @@ def connect_database(
             success = db_manager.connect_snowflake(final_account, final_username, final_password or "", final_warehouse, final_database, final_schema, final_role)
             
         elif db_type.lower() == "dremio":
-            # Use provided parameters or fall back to config
-            final_host = host or getattr(db_config, 'dremio_host', None)
-            final_port = port or getattr(db_config, 'dremio_port', 31010)
-            final_username = username or getattr(db_config, 'dremio_username', None)
-            final_password = password or getattr(db_config, 'dremio_password', None)
-            final_ssl = ssl if ssl is not None else False
+            # Check for new PAT-based configuration first (parameters override config)
+            final_uri = uri or getattr(db_config, 'dremio_uri', None)
+            final_pat = pat or getattr(db_config, 'dremio_pat', None)
             
-            if not all([final_host, final_port, final_username]):
-                return create_error_response(
-                    "Missing required Dremio parameters: host, port, username (provide via parameters or .env file)",
-                    "parameter_error"
-                )
-            success = db_manager.connect_dremio(final_host, final_port, final_username, final_password or "", final_ssl)
+            if final_uri and final_pat:
+                # Use PAT-based authentication (preferred)
+                logger.info(f"🔍 MCP DEBUG - Dremio PAT config: uri={final_uri}, pat={'***SET***'}")
+                success = db_manager.connect_dremio(uri=final_uri, pat=final_pat)
+            else:
+                # Fall back to legacy username/password authentication
+                final_host = host or getattr(db_config, 'dremio_host', None)
+                final_port = port or getattr(db_config, 'dremio_port', 9047)
+                final_username = username or getattr(db_config, 'dremio_username', None)
+                final_password = password or getattr(db_config, 'dremio_password', None)
+                final_ssl = ssl if ssl is not None else getattr(db_config, 'dremio_ssl', False)
+                
+                logger.info(f"🔍 MCP DEBUG - Dremio legacy config: host={final_host}, port={final_port}, username={final_username}, password={'***SET***' if final_password else 'NOT SET'}, ssl={final_ssl}")
+                
+                if not all([final_host, final_port, final_username]):
+                    missing = []
+                    if not final_host: missing.append("host")
+                    if not final_port: missing.append("port") 
+                    if not final_username: missing.append("username")
+                    logger.error(f"🔍 MCP DEBUG - Missing Dremio parameters: {missing}")
+                    return create_error_response(
+                        "Missing required Dremio parameters: host, port, username (provide via parameters or .env file)\nFor PAT-based auth, set DREMIO_URI and DREMIO_PAT in .env file",
+                        "parameter_error"
+                    )
+                success = db_manager.connect_dremio(final_host, final_port, final_username, final_password or "", final_ssl)
             
         else:
             return create_error_response(
@@ -147,7 +168,7 @@ def diagnose_connection_issue(
             
             if not actual_port:
                 result["issues_found"].append("Missing DREMIO_PORT")
-                result["recommendations"].append("Set DREMIO_PORT in .env file (default: 31010) or pass port parameter")
+                result["recommendations"].append("Set DREMIO_PORT in .env file (default: 9047) or pass port parameter")
             
             if not actual_username:
                 result["issues_found"].append("Missing DREMIO_USERNAME")
@@ -168,7 +189,7 @@ def diagnose_connection_issue(
             # Add Dremio-specific recommendations
             result["recommendations"].extend([
                 "Ensure Dremio coordinator is running and accessible",
-                "Verify port 31010 (default) is not blocked by firewall",
+                "Verify port 9047 (REST API) is not blocked by firewall",
                 "For production Dremio, check if SSL/TLS is required (use ssl=True)",
                 "Confirm username/password are correct for Dremio",
                 "Try connecting with Dremio's web UI first to verify credentials",
@@ -177,7 +198,7 @@ def diagnose_connection_issue(
             
             # Connection test recommendations
             result["connection_test_steps"] = [
-                f"1. Test basic connectivity: telnet {actual_host or 'HOST'} {actual_port or 31010}",
+                f"1. Test basic connectivity: telnet {actual_host or 'HOST'} {actual_port or 9047}",
                 "2. Check Dremio web UI is accessible (usually same host, port 9047)",
                 "3. Verify credentials work in Dremio web interface",
                 "4. Check Dremio coordinator logs for connection attempts",

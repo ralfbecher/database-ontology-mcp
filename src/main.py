@@ -65,7 +65,10 @@ def connect_database(
     warehouse: Optional[str] = None,
     schema: Optional[str] = "PUBLIC",
     role: Optional[str] = None,
-    ssl: Optional[bool] = False
+    ssl: Optional[bool] = False,
+    # New Dremio PAT-based authentication (following official dremio-mcp)
+    uri: Optional[str] = None,
+    pat: Optional[str] = None
 ) -> Dict[str, Any]:
     """Connect to a PostgreSQL, Snowflake, or Dremio database.
     
@@ -82,7 +85,9 @@ def connect_database(
         warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
         schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
         role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
-        ssl: Enable SSL connection (Dremio only, default: False for community edition compatibility)
+        ssl: Enable SSL connection (Dremio legacy only, uses DREMIO_SSL from .env if not provided, default: False for community edition compatibility)
+        uri: Dremio API endpoint (Dremio only, uses DREMIO_URI from .env if not provided) - preferred for PAT auth
+        pat: Personal Access Token (Dremio only, uses DREMIO_PAT from .env if not provided) - preferred auth method
     
     Returns:
         Connection status information or error response
@@ -95,9 +100,14 @@ def connect_database(
         
         # Override specific parameters
         connect_database("postgresql", host="custom.host.com", port=5433)
-        connect_database("dremio", host="dremio.company.com", port=31010, ssl=True)  # Enable SSL for production
+        
+        # Dremio with PAT authentication (preferred)
+        connect_database("dremio", uri="https://api.dremio.cloud", pat="your-personal-access-token")
+        
+        # Dremio legacy authentication
+        connect_database("dremio", host="dremio.company.com", port=9047, ssl=True)
     """
-    return conn_tools.connect_database(db_type, host, port, database, username, password, account, warehouse, schema, role, ssl)
+    return conn_tools.connect_database(db_type, host, port, database, username, password, account, warehouse, schema, role, ssl, uri, pat)
 
 
 @mcp.tool()
@@ -617,40 +627,9 @@ def get_server_info() -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
+    # Minimal startup logging to reduce noise
     logger.info(f"Starting {SERVER_NAME} v{__version__}")
-    logger.info(f"{__description__}")
-    logger.info("=" * 60)
-    logger.info("🔧 Available MCP Tools:")
-    
-    tools = [
-        "connect_database - Connect to PostgreSQL, Snowflake, or Dremio with security",
-        "diagnose_connection_issue - Diagnose and troubleshoot connection problems",
-        "list_schemas - List available database schemas",
-        "get_analysis_context - Complete schema analysis with automatic ontology generation", 
-        "sample_table_data - Sample table data with security controls",
-        "generate_ontology - Generate RDF ontology with validation",
-        "load_ontology_from_file - Load saved/edited ontology from tmp folder",
-        "validate_sql_syntax - Validate SQL queries before execution",
-        "execute_sql_query - Execute validated SQL queries safely",
-        "generate_chart - Generate interactive charts from query results",
-        "get_server_info - Get comprehensive server information"
-    ]
-    
-    for tool in tools:
-        logger.info(f"  • {tool}")
-    
-    logger.info("")
-    logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake, Dremio")
-    logger.info("🧠 LLM Enrichment: Available via MCP prompts and tools")
-    logger.info("🔒 Security: Credential handling and input validation")
-    logger.info("⚡ Performance: Connection pooling and parallel processing")
-    logger.info("📊 Observability: Structured logging and comprehensive error handling")
-    logger.info("")
-    logger.info("📋 Configuration:")
-    logger.info(f"  • Log Level: {server_config.log_level}")
-    logger.info(f"  • Base URI: {server_config.ontology_base_uri}")
-    logger.info("")
-    logger.info("🚀 Starting MCP server with stdio transport...")
-    logger.info("📡 Server ready for stdio MCP protocol messages")
+    logger.debug(f"Configuration: log_level={server_config.log_level}, base_uri={server_config.ontology_base_uri}")
+    logger.debug("MCP server ready with 11 tools for PostgreSQL, Snowflake, and Dremio")
     
     mcp.run()

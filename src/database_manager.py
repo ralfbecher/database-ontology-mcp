@@ -64,6 +64,14 @@ class DatabaseManager:
         self._max_overflow = 10
         self._last_connection_params: Optional[Dict[str, Any]] = None
         self._dremio_rest_connection: Optional[Dict[str, Any]] = None
+    
+    def _log_sql_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> None:
+        """Log SQL query with parameters for debugging."""
+        db_type = self.connection_info.get("type", "unknown")
+        if params:
+            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {query} | PARAMS: {params}")
+        else:
+            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {query}")
         
     def _test_connection(self) -> bool:
         """Test if the current connection is healthy."""
@@ -80,6 +88,11 @@ class DatabaseManager:
     
     def _ensure_connection(self):
         """Ensure we have a healthy database connection, reconnecting if necessary."""
+        # For Dremio REST connections, just check if connection info exists
+        if self._dremio_rest_connection:
+            logger.debug("_ensure_connection: Dremio REST connection info available")
+            return
+        
         logger.debug(f"_ensure_connection: engine exists: {self.engine is not None}")
         logger.debug(f"_ensure_connection: last_params available: {self._last_connection_params is not None}")
         
@@ -298,88 +311,159 @@ class DatabaseManager:
             self.engine = None
             return False
     
-    def connect_dremio(self, host: str, port: int, username: str, password: str, ssl: bool = False) -> bool:
+    def connect_dremio(self, host: str = None, port: int = None, username: str = None, password: str = None, 
+                       ssl: bool = False, uri: str = None, pat: str = None) -> bool:
         """Connect to Dremio using REST API instead of PostgreSQL protocol."""
+        logger.info(f"🔍 MCP DEBUG - connect_dremio called with host={host}, port={port}, username={username}, password={'***SET***' if password else 'NOT SET'}, ssl={ssl}, uri={uri}, pat={'***SET***' if pat else 'NOT SET'}")
         try:
-            # Validate inputs
-            if not all([host, username]):
-                logger.error("Missing required Dremio connection parameters")
+            # Validate inputs - prefer PAT-based authentication
+            if uri and pat:
+                logger.info("🔍 MCP DEBUG - Using PAT-based authentication (preferred)")
+            elif host and username:
+                logger.info("🔍 MCP DEBUG - Using legacy username/password authentication")
+            else:
+                logger.error(f"🔍 MCP DEBUG - Missing required Dremio connection parameters. Need either (uri + pat) or (host + username)")
                 return False
             
             # Import the Dremio client
             import asyncio
             from .dremio_client import create_dremio_client
             
-            # For Dremio, we use port 9047 for REST API, not the provided port
-            api_port = 9047
-            logger.info(f"Connecting to Dremio REST API at {host}:{api_port} (SSL: {ssl})")
-            
             # Create and test Dremio client connection
             async def test_dremio_connection():
-                async with await create_dremio_client(
-                    host=host, 
-                    port=api_port, 
-                    username=username, 
-                    password=password, 
-                    ssl=ssl
-                ) as client:
-                    return await client.test_connection()
+                if uri and pat:
+                    # PAT-based authentication
+                    logger.info(f"🔍 MCP DEBUG - Connecting to Dremio API at {uri} with PAT")
+                    async with await create_dremio_client(
+                        uri=uri,
+                        pat=pat
+                    ) as client:
+                        return await client.test_connection()
+                else:
+                    # Legacy username/password authentication
+                    # For legacy mode, use port 9047 for REST API
+                    api_port = 9047
+                    logger.info(f"🔍 MCP DEBUG - Connecting to legacy Dremio REST API at {host}:{api_port} (SSL: {ssl})")
+                    async with await create_dremio_client(
+                        host=host, 
+                        port=api_port, 
+                        username=username, 
+                        password=password, 
+                        ssl=ssl
+                    ) as client:
+                        return await client.test_connection()
             
             # Run the async connection test
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            logger.debug("Starting async connection test")
+            
+            # Check if there's an existing event loop (e.g., from MCP server)
             try:
-                connection_result = loop.run_until_complete(test_dremio_connection())
-            finally:
-                loop.close()
+                loop = asyncio.get_running_loop()
+                logger.debug("Using existing event loop from MCP server")
+                # If we're already in an async context, use sync_to_async approach
+                import concurrent.futures
+                import threading
+                
+                # Create a new thread to run the async code
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(asyncio.run, test_dremio_connection())
+                    connection_result = future.result(timeout=30)
+                logger.debug(f"Async connection test completed via thread: {connection_result}")
+                
+            except RuntimeError:
+                # No event loop is running, we can create our own
+                logger.debug("No existing event loop, creating new one")
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    connection_result = loop.run_until_complete(test_dremio_connection())
+                    logger.debug(f"Async connection test completed: {connection_result}")
+                except Exception as async_error:
+                    logger.error(f"Async connection test failed with exception: {type(async_error).__name__}: {async_error}")
+                    return False
+                finally:
+                    loop.close()
+            
+            logger.info(f"🔍 MCP DEBUG - Async connection test result: {connection_result}")
             
             if not connection_result.get("success"):
-                logger.error(f"Dremio connection test failed: {connection_result.get('error')}")
+                error_msg = connection_result.get('error', 'Unknown error')
+                error_type = connection_result.get('error_type', 'Unknown error type')
+                logger.error(f"🔍 MCP DEBUG - Dremio connection test failed: {error_msg} (Type: {error_type})")
+                logger.error(f"Full connection result: {connection_result}")
                 return False
             
             # Store connection info for Dremio REST API
-            self.connection_info = {
-                "type": "dremio",
-                "host": host,
-                "port": api_port,
-                "username": username,
-                "ssl": ssl,
-                "api": "REST"
-            }
+            if uri and pat:
+                self.connection_info = {
+                    "type": "dremio",
+                    "uri": uri,
+                    "auth_method": "PAT",
+                    "api": "REST"
+                }
+                # Store connection parameters for reconnection
+                self._last_connection_params = {
+                    "type": "dremio",
+                    "uri": uri,
+                    "pat": pat
+                }
+                # Set connection details for REST API
+                self._dremio_rest_connection = {
+                    "uri": uri,
+                    "pat": pat
+                }
+            else:
+                # Legacy connection info
+                api_port = 9047
+                self.connection_info = {
+                    "type": "dremio", 
+                    "host": host,
+                    "port": api_port,
+                    "username": username,
+                    "ssl": ssl,
+                    "auth_method": "username_password",
+                    "api": "REST"
+                }
+                # Store connection parameters for reconnection
+                self._last_connection_params = {
+                    "type": "dremio",
+                    "host": host,
+                    "port": port,  # Original port for compatibility
+                    "username": username,
+                    "password": password,
+                    "ssl": ssl
+                }
+                # Set connection details for REST API
+                self._dremio_rest_connection = {
+                    "host": host,
+                    "port": api_port,
+                    "username": username,
+                    "password": password,
+                    "ssl": ssl
+                }
             
-            # Store connection parameters for reconnection
-            self._last_connection_params = {
-                "type": "dremio",
-                "host": host,
-                "port": port,  # Original port for compatibility
-                "username": username,
-                "password": password,
-                "ssl": ssl
-            }
-            
-            # Set a special flag to indicate this is a Dremio REST connection
-            self._dremio_rest_connection = {
-                "host": host,
-                "port": api_port,
-                "username": username,
-                "password": password,
-                "ssl": ssl
-            }
             
             # Don't set self.engine for Dremio REST API connections
             self.engine = None
             self.metadata = None
             
-            logger.info(f"Connected to Dremio via REST API at {host}:{api_port}")
+            logger.info(f"✅ Successfully connected to Dremio via REST API at {host}:{api_port}")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to connect to Dremio: {type(e).__name__}: {e}")
+            logger.error(f"❌ Failed to connect to Dremio: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             self.engine = None
             return False
     
     def get_schemas(self) -> List[str]:
         """Get list of available schemas."""
+        # Check for Dremio REST connection
+        if self._dremio_rest_connection:
+            return self._get_dremio_schemas()
+        
+        # Traditional SQL database check
         if not self.engine:
             raise RuntimeError("No database connection established")
         
@@ -406,9 +490,285 @@ class DatabaseManager:
             logger.error(f"Failed to get schemas: {e}")
             return []
     
+    def _get_dremio_schemas(self) -> List[str]:
+        """Get Dremio schemas/spaces via REST API."""
+        import asyncio
+        from .dremio_client import create_dremio_client
+        
+        async def fetch_schemas():
+            """Fetch Dremio catalogs/schemas via REST API."""
+            try:
+                conn = self._dremio_rest_connection
+                if conn.get('uri') and conn.get('pat'):
+                    # PAT-based authentication
+                    client = await create_dremio_client(uri=conn['uri'], pat=conn['pat'])
+                else:
+                    # Legacy authentication
+                    client = await create_dremio_client(
+                        host=conn['host'], 
+                        port=conn['port'],
+                        username=conn['username'],
+                        password=conn['password'],
+                        ssl=conn.get('ssl', False)
+                    )
+                
+                async with client:
+                    # Get top-level catalogs first
+                    catalogs = await client.get_catalogs()
+                    schemas = set()  # Use set to avoid duplicates
+                    
+                    logger.debug(f"Dremio catalogs response: {catalogs}")
+                    
+                    # Process top-level catalogs
+                    for catalog in catalogs:
+                        path = catalog.get('path', [])
+                        catalog_type = catalog.get('type', '')
+                        catalog_id = catalog.get('id', '')
+                        
+                        logger.debug(f"Top-level catalog: path={path}, type={catalog_type}, id={catalog_id}")
+                        
+                        if isinstance(path, list) and len(path) > 0:
+                            top_level = path[0]
+                            full_path = '.'.join(path)
+                            
+                            # Add top-level space/source
+                            if top_level and top_level not in DREMIO_SYSTEM_SCHEMAS:
+                                schemas.add(top_level)
+                            
+                            # Add full path if nested
+                            if len(path) > 1 and full_path not in DREMIO_SYSTEM_SCHEMAS:
+                                schemas.add(full_path)
+                            
+                            # For containers (SPACE, SOURCE), recursively get children
+                            if catalog_type in ['CONTAINER', 'SPACE', 'SOURCE'] and catalog_id:
+                                await self._add_dremio_children_recursive(client, path, schemas, max_depth=3)
+                        else:
+                            # Handle simple string paths
+                            catalog_name = catalog.get('name') or str(path) if path else ''
+                            if catalog_name and catalog_name not in DREMIO_SYSTEM_SCHEMAS:
+                                schemas.add(catalog_name)
+                    
+                    # Convert back to sorted list
+                    schema_list = sorted(list(schemas))
+                    
+                    # If no schemas found, provide defaults
+                    if not schema_list:
+                        logger.info("No catalogs found, using default Dremio spaces")
+                        schema_list = ["@dremio", "Samples"]
+                    
+                    logger.info(f"Found {len(schema_list)} Dremio schemas/spaces: {schema_list[:10]}")  # Log first 10
+                    return schema_list
+                    
+            except Exception as e:
+                logger.error(f"Failed to get Dremio schemas via REST: {e}")
+                return []
+        
+        # Handle async execution in sync context
+        try:
+            loop = asyncio.get_running_loop()
+            # Run in thread if already in async context
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, fetch_schemas())
+                return future.result(timeout=30)
+        except RuntimeError:
+            # No event loop, create one
+            return asyncio.run(fetch_schemas())
+    
+    async def _add_dremio_children_recursive(self, client, path: List[str], schemas: set, max_depth: int = 3, current_depth: int = 0):
+        """Recursively add children of Dremio containers to the schemas set."""
+        if current_depth >= max_depth:
+            logger.debug(f"Max depth {max_depth} reached for path: {'.'.join(path)}")
+            return
+            
+        try:
+            # Get detailed info about this catalog item
+            catalog_info = await client.get_catalog_info(path)
+            logger.debug(f"Catalog info for {'.'.join(path)}: {catalog_info}")
+            
+            # Check if this catalog has children
+            children = catalog_info.get('children', [])
+            if not children:
+                logger.debug(f"No children found for path: {'.'.join(path)}")
+                return
+                
+            for child in children:
+                child_path = child.get('path', [])
+                child_type = child.get('type', '')
+                child_name = child.get('name', '')
+                
+                if not child_path or not isinstance(child_path, list):
+                    continue
+                    
+                # Add the child path to schemas
+                full_child_path = '.'.join(child_path)
+                if full_child_path and full_child_path not in DREMIO_SYSTEM_SCHEMAS:
+                    schemas.add(full_child_path)
+                    logger.debug(f"Added child schema: {full_child_path}")
+                
+                # If this child is also a container, recurse into it
+                if child_type in ['CONTAINER', 'SPACE', 'SOURCE', 'FOLDER'] and current_depth < max_depth - 1:
+                    await self._add_dremio_children_recursive(client, child_path, schemas, max_depth, current_depth + 1)
+                    
+        except Exception as e:
+            logger.warning(f"Failed to get children for path {'.'.join(path)}: {e}")
+    
+    def _get_dremio_tables(self, schema_name: Optional[str] = None) -> List[str]:
+        """Get Dremio tables via REST API."""
+        import asyncio
+        from .dremio_client import create_dremio_client
+        
+        async def fetch_tables():
+            """Fetch tables from Dremio schema/space via REST API."""
+            try:
+                conn = self._dremio_rest_connection
+                if conn.get('uri') and conn.get('pat'):
+                    client = await create_dremio_client(uri=conn['uri'], pat=conn['pat'])
+                else:
+                    client = await create_dremio_client(
+                        host=conn['host'],
+                        port=conn['port'],
+                        username=conn['username'],
+                        password=conn['password'],
+                        ssl=conn.get('ssl', False)
+                    )
+                
+                async with client:
+                    # If no schema specified, get tables from all schemas
+                    if not schema_name:
+                        # Execute query to get all tables
+                        query = "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.\"TABLES\" WHERE TABLE_TYPE = 'TABLE'"
+                    else:
+                        # Get tables from specific schema
+                        query = f"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.\"TABLES\" WHERE TABLE_SCHEMA = '{schema_name}' AND TABLE_TYPE = 'TABLE'"
+                    
+                    result = await client.execute_query(query)
+                    
+                    if result.get('success'):
+                        tables = []
+                        for row in result.get('data', []):
+                            if schema_name:
+                                # Just table name if schema specified
+                                table_name = row.get('TABLE_NAME', '')
+                            else:
+                                # Include schema prefix if no specific schema
+                                schema = row.get('TABLE_SCHEMA', '')
+                                table_name = row.get('TABLE_NAME', '')
+                                if schema and schema != 'INFORMATION_SCHEMA':
+                                    table_name = f"{schema}.{table_name}" if table_name else ''
+                            
+                            if table_name:
+                                tables.append(table_name)
+                        
+                        return sorted(list(set(tables)))  # Remove duplicates and sort
+                    else:
+                        logger.error(f"Failed to get Dremio tables: {result.get('error')}")
+                        return []
+                    
+            except Exception as e:
+                logger.error(f"Failed to get Dremio tables via REST: {e}")
+                return []
+        
+        # Handle async execution
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, fetch_tables())
+                return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(fetch_tables())
+    
+    def _analyze_dremio_table(self, table_name: str, schema_name: Optional[str] = None) -> Optional[TableInfo]:
+        """Analyze a Dremio table via REST API."""
+        import asyncio
+        from .dremio_client import create_dremio_client
+        
+        async def fetch_table_info():
+            """Fetch table structure from Dremio via REST API."""
+            try:
+                conn = self._dremio_rest_connection
+                if conn.get('uri') and conn.get('pat'):
+                    client = await create_dremio_client(uri=conn['uri'], pat=conn['pat'])
+                else:
+                    client = await create_dremio_client(
+                        host=conn['host'],
+                        port=conn['port'],
+                        username=conn['username'],
+                        password=conn['password'],
+                        ssl=conn.get('ssl', False)
+                    )
+                
+                async with client:
+                    # Get column information
+                    if schema_name:
+                        column_query = f"""
+                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_NAME = '{table_name}' AND TABLE_SCHEMA = '{schema_name}'
+                        ORDER BY ORDINAL_POSITION
+                        """
+                    else:
+                        column_query = f"""
+                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_NAME = '{table_name}'
+                        ORDER BY ORDINAL_POSITION
+                        """
+                    
+                    result = await client.execute_query(column_query)
+                    
+                    if not result.get('success'):
+                        logger.error(f"Failed to get column info for {table_name}: {result.get('error')}")
+                        return None
+                    
+                    columns = []
+                    for row in result.get('data', []):
+                        col_info = ColumnInfo(
+                            name=row.get('COLUMN_NAME', ''),
+                            data_type=row.get('DATA_TYPE', 'VARCHAR'),
+                            is_nullable=row.get('IS_NULLABLE', 'YES') == 'YES',
+                            is_primary_key=False,  # Dremio doesn't have traditional PKs
+                            is_foreign_key=False,  # Dremio doesn't have traditional FKs
+                            foreign_key_table=None,
+                            foreign_key_column=None,
+                            comment=None
+                        )
+                        columns.append(col_info)
+                    
+                    # Create table info
+                    table_info = TableInfo(
+                        name=table_name,
+                        schema=schema_name or 'default',
+                        columns=columns,
+                        primary_keys=[],  # Dremio doesn't have traditional PKs
+                        foreign_keys=[],  # Dremio doesn't have traditional FKs
+                        comment=None
+                    )
+                    
+                    return table_info
+                    
+            except Exception as e:
+                logger.error(f"Failed to analyze Dremio table {table_name}: {e}")
+                return None
+        
+        # Handle async execution
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, fetch_table_info())
+                return future.result(timeout=30)
+        except RuntimeError:
+            return asyncio.run(fetch_table_info())
+    
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         """Get list of tables in a schema."""
-        logger.debug(f"get_tables: Starting, engine exists: {self.has_engine()}")
+        logger.debug(f"get_tables: Starting, has_engine: {self.has_engine()}, dremio_rest: {bool(self._dremio_rest_connection)}")
+        
+        # Check for Dremio REST connection
+        if self._dremio_rest_connection:
+            return self._get_dremio_tables(schema_name)
         
         # Ensure connection before proceeding
         try:
@@ -446,7 +806,11 @@ class DatabaseManager:
     
     def analyze_table(self, table_name: str, schema_name: Optional[str] = None) -> Optional[TableInfo]:
         """Analyze a specific table and return detailed information."""
-        logger.debug(f"analyze_table: Starting analysis of {table_name}, engine exists: {self.has_engine()}")
+        logger.debug(f"analyze_table: Starting analysis of {table_name}, has_engine: {self.has_engine()}, dremio_rest: {bool(self._dremio_rest_connection)}")
+        
+        # Check for Dremio REST connection
+        if self._dremio_rest_connection:
+            return self._analyze_dremio_table(table_name, schema_name)
         
         # Ensure connection before proceeding
         try:
@@ -533,7 +897,9 @@ class DatabaseManager:
                             full_table_name = f'"{table_name}"'
                         
                         # Get row count
-                        count_query = text(f'SELECT COUNT(*) FROM {full_table_name}')
+                        count_query_str = f'SELECT COUNT(*) FROM {full_table_name}'
+                        self._log_sql_query(count_query_str)
+                        count_query = text(count_query_str)
                         result = conn.execute(count_query)
                         row_count = result.scalar()
                         
@@ -542,14 +908,16 @@ class DatabaseManager:
                             db_type = self.connection_info.get("type")
                             if db_type == "snowflake":
                                 # Snowflake uses SAMPLE for random sampling
-                                sample_query = text(f'SELECT * FROM {full_table_name} SAMPLE (10 ROWS) LIMIT 10')
+                                sample_query_str = f'SELECT * FROM {full_table_name} SAMPLE (10 ROWS) LIMIT 10'
                             elif db_type == "dremio":
                                 # Dremio doesn't support TABLESAMPLE or RANDOM(), use simple LIMIT
-                                sample_query = text(f'SELECT * FROM {full_table_name} LIMIT 10')
+                                sample_query_str = f'SELECT * FROM {full_table_name} LIMIT 10'
                             else:
                                 # PostgreSQL uses ORDER BY RANDOM() for random sampling
-                                sample_query = text(f'SELECT * FROM {full_table_name} ORDER BY RANDOM() LIMIT 10')
+                                sample_query_str = f'SELECT * FROM {full_table_name} ORDER BY RANDOM() LIMIT 10'
                             
+                            self._log_sql_query(sample_query_str)
+                            sample_query = text(sample_query_str)
                             sample_result = conn.execute(sample_query)
                             sample_columns = list(sample_result.keys())
                             
@@ -708,8 +1076,11 @@ class DatabaseManager:
                 else:
                     full_table_name = f'"{table_name}"'
                 
-                query = text(f'SELECT * FROM {full_table_name} LIMIT :limit')
-                result = conn.execute(query, {"limit": limit})
+                query_str = f'SELECT * FROM {full_table_name} LIMIT :limit'
+                params = {"limit": limit}
+                self._log_sql_query(query_str, params)
+                query = text(query_str)
+                result = conn.execute(query, params)
                 columns = list(result.keys())
                 
                 rows = []
@@ -980,6 +1351,7 @@ class DatabaseManager:
                 result_data["warnings"].append(f"Safety LIMIT {limit} applied to prevent large result sets")
             
             # Step 3: Execute the query
+            self._log_sql_query(query_to_execute)
             with self.get_connection() as conn:
                 result = conn.execute(text(query_to_execute))
                 

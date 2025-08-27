@@ -42,11 +42,17 @@ class DatabaseConfig:
     snowflake_schema: str = DEFAULT_SNOWFLAKE_SCHEMA
     snowflake_role: str = "PUBLIC"
     
-    # Dremio settings
+    # Dremio settings (following official dremio-mcp approach)
+    dremio_uri: Optional[str] = None  # Full API endpoint like https://api.dremio.cloud or https://host:port
+    dremio_pat: Optional[str] = None  # Personal Access Token
+    dremio_project_id: Optional[str] = None  # Optional project ID
+    
+    # Legacy settings for backward compatibility
     dremio_host: Optional[str] = None
     dremio_port: int = DEFAULT_DREMIO_PORT
     dremio_username: Optional[str] = None
     dremio_password: Optional[str] = None
+    dremio_ssl: bool = False
 
 
 class ConfigManager:
@@ -86,10 +92,17 @@ class ConfigManager:
                 snowflake_database=os.getenv("SNOWFLAKE_DATABASE"),
                 snowflake_schema=os.getenv("SNOWFLAKE_SCHEMA", DEFAULT_SNOWFLAKE_SCHEMA),
                 snowflake_role=os.getenv("SNOWFLAKE_ROLE", "PUBLIC"),
+                # New PAT-based settings (preferred)
+                dremio_uri=os.getenv("DREMIO_URI"),
+                dremio_pat=os.getenv("DREMIO_PAT"),
+                dremio_project_id=os.getenv("DREMIO_PROJECT_ID"),
+                
+                # Legacy settings for backward compatibility
                 dremio_host=os.getenv("DREMIO_HOST"),
                 dremio_port=int(os.getenv("DREMIO_PORT", DEFAULT_DREMIO_PORT)),
                 dremio_username=os.getenv("DREMIO_USERNAME"),
-                dremio_password=os.getenv("DREMIO_PASSWORD")
+                dremio_password=os.getenv("DREMIO_PASSWORD"),
+                dremio_ssl=os.getenv("DREMIO_SSL", "false").lower() == "true"
             )
             logger.info("Database configuration loaded")
         return self._db_config
@@ -116,12 +129,21 @@ class ConfigManager:
                 "database": config.snowflake_database
             }
         elif db_type == "dremio":
-            required_fields = {
-                "host": config.dremio_host,
-                "port": config.dremio_port,
-                "username": config.dremio_username,
-                "password": config.dremio_password
-            }
+            # Prefer new PAT-based authentication
+            if config.dremio_uri and config.dremio_pat:
+                required_fields = {
+                    "uri": config.dremio_uri,
+                    "pat": config.dremio_pat
+                }
+            else:
+                # Fall back to legacy username/password authentication
+                required_fields = {
+                    "host": config.dremio_host,
+                    "port": config.dremio_port,
+                    "username": config.dremio_username,
+                    "password": config.dremio_password,
+                    "ssl": config.dremio_ssl
+                }
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
         

@@ -24,16 +24,22 @@ class DremioQueryError(Exception):
 class DremioClient:
     """Dremio REST API client."""
     
-    def __init__(self, uri: str, username: str = None, password: str = None, token: str = None):
+    def __init__(self, uri: str, username: str = None, password: str = None, token: str = None, pat: str = None):
         self.uri = uri.rstrip('/')
         self.username = username
         self.password = password
         self.token = token
+        self.pat = pat  # Personal Access Token (preferred)
         self.session = None
         
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
-        if not self.token and self.username and self.password:
+        if self.pat:
+            # Use PAT directly as token (following official dremio-mcp approach)
+            self.token = self.pat
+            logger.info("Using Personal Access Token (PAT) for authentication")
+        elif not self.token and self.username and self.password:
+            # Fall back to username/password authentication
             await self._authenticate()
         return self
         
@@ -42,9 +48,9 @@ class DremioClient:
             await self.session.close()
     
     async def _authenticate(self):
-        """Authenticate with username/password to get a token."""
+        """Authenticate with username/password to get a token (following official Dremio examples)."""
         auth_data = {
-            "userName": self.username,
+            "userName": self.username,  # Official Dremio API uses 'userName' not 'username'
             "password": self.password
         }
         
@@ -74,7 +80,7 @@ class DremioClient:
             raise DremioAuthError("No authentication token available")
             
         headers = {
-            "Authorization": f"_dremio{self.token}",
+            "Authorization": f"Bearer {self.token}" if self.pat else f"_dremio{self.token}",
             "Content-Type": "application/json"
         }
         if 'headers' in kwargs:
@@ -105,6 +111,9 @@ class DremioClient:
     async def execute_query(self, sql: str, limit: int = 1000) -> Dict[str, Any]:
         """Execute SQL query and return results."""
         try:
+            # Log the SQL query being executed
+            logger.info(f"🔍 DREMIO SQL QUERY: {sql}")
+            
             # Submit query
             query_data = {"sql": sql}
             job = await self._make_request("POST", "/api/v3/sql", json=query_data)
@@ -125,7 +134,7 @@ class DremioClient:
                 elif state in ["FAILED", "CANCELED"]:
                     error = job_status.get("errorMessage", "Query failed")
                     raise DremioQueryError(f"Query {state.lower()}: {error}")
-                elif state in ["RUNNING", "STARTING", "PLANNING", "PENDING", "QUEUED"]:
+                elif state in ["RUNNING", "STARTING", "PLANNING", "PENDING", "QUEUED", "METADATA_RETRIEVAL"]:
                     await asyncio.sleep(0.5)  # Poll every 500ms
                 else:
                     logger.warning(f"Unknown job state: {state}")
@@ -174,7 +183,25 @@ class DremioClient:
         """Get list of catalogs (schemas)."""
         try:
             catalogs = await self._make_request("GET", "/api/v3/catalog")
-            return catalogs.get("data", [])
+            data = catalogs.get("data", [])
+            # Process catalog data to extract proper structure
+            result = []
+            for item in data:
+                # Handle path which might be a list
+                path = item.get("path", [])
+                if isinstance(path, list) and path:
+                    name = path[-1]  # Get the last element as the name
+                else:
+                    name = path if isinstance(path, str) else ""
+                
+                result.append({
+                    "name": name,
+                    "path": path,
+                    "type": item.get("type", ""),
+                    "id": item.get("id", ""),
+                    "tag": item.get("tag", "")
+                })
+            return result
         except Exception as e:
             logger.error(f"Failed to get catalogs: {e}")
             return []
@@ -182,8 +209,12 @@ class DremioClient:
     async def get_catalog_info(self, path: List[str]) -> Dict[str, Any]:
         """Get information about a catalog item."""
         try:
-            # For nested paths, join with dots
-            catalog_path = ".".join(path) if isinstance(path, list) else path
+            # For nested paths, join with slashes (Dremio REST API requirement)
+            if isinstance(path, list):
+                catalog_path = "/".join(path)
+            else:
+                # If already a string, convert dots to slashes if present
+                catalog_path = str(path).replace(".", "/")
             info = await self._make_request("GET", f"/api/v3/catalog/by-path/{catalog_path}")
             return info
         except Exception as e:
@@ -215,12 +246,32 @@ class DremioClient:
             }
 
 
-async def create_dremio_client(host: str, port: int = 9047, username: str = None, 
-                              password: str = None, token: str = None, 
-                              ssl: bool = True) -> DremioClient:
-    """Create and authenticate Dremio client."""
-    protocol = "https" if ssl else "http"
-    uri = f"{protocol}://{host}:{port}"
+async def create_dremio_client(host: str = None, port: int = 9047, username: str = None, 
+                              password: str = None, token: str = None, pat: str = None,
+                              uri: str = None, ssl: bool = True) -> DremioClient:
+    """Create and authenticate Dremio client.
     
-    client = DremioClient(uri=uri, username=username, password=password, token=token)
+    Supports both new PAT-based authentication and legacy username/password.
+    
+    Args:
+        uri: Full Dremio API URI (preferred, overrides host/port/ssl)
+        pat: Personal Access Token (preferred authentication method)
+        host: Dremio host (legacy)
+        port: Dremio port (legacy, default 9047)
+        username: Username (legacy)
+        password: Password (legacy)
+        token: Existing token (legacy)
+        ssl: Enable SSL (legacy, default True)
+    """
+    if uri:
+        # Use provided URI directly (official dremio-mcp approach)
+        final_uri = uri
+    elif host:
+        # Build URI from host/port/ssl (legacy approach)
+        protocol = "https" if ssl else "http"
+        final_uri = f"{protocol}://{host}:{port}"
+    else:
+        raise ValueError("Either 'uri' or 'host' must be provided")
+    
+    client = DremioClient(uri=final_uri, username=username, password=password, token=token, pat=pat)
     return client
