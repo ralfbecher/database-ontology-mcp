@@ -487,17 +487,31 @@ class DatabaseManager:
                 db_type = self.connection_info.get("type")
                 if db_type == "snowflake":
                     excluded_schemas = "', '".join(SNOWFLAKE_SYSTEM_SCHEMAS)
+                    query = text(f"""
+                        SELECT schema_name 
+                        FROM information_schema.schemata 
+                        WHERE schema_name NOT IN ('{excluded_schemas}')
+                        ORDER BY schema_name
+                    """)
                 elif db_type == "dremio":
                     excluded_schemas = "', '".join(DREMIO_SYSTEM_SCHEMAS)
+                    query = text(f"""
+                        SELECT schema_name 
+                        FROM information_schema.schemata 
+                        WHERE schema_name NOT IN ('{excluded_schemas}')
+                        ORDER BY schema_name
+                    """)
                 else:  # postgresql
                     excluded_schemas = "', '".join(POSTGRES_SYSTEM_SCHEMAS)
-                
-                query = text(f"""
-                    SELECT schema_name 
-                    FROM information_schema.schemata 
-                    WHERE schema_name NOT IN ('{excluded_schemas}')
-                    ORDER BY schema_name
-                """)
+                    # For PostgreSQL, also exclude temporary schemas (pg_temp_*, pg_toast_temp_*)
+                    query = text(f"""
+                        SELECT schema_name 
+                        FROM information_schema.schemata 
+                        WHERE schema_name NOT IN ('{excluded_schemas}')
+                          AND schema_name NOT LIKE 'pg_temp_%'
+                          AND schema_name NOT LIKE 'pg_toast_temp_%'
+                        ORDER BY schema_name
+                    """)
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
