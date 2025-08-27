@@ -614,15 +614,19 @@ class DatabaseManager:
                 if not child_path or not isinstance(child_path, list):
                     continue
                     
-                # Add the child path to schemas
-                full_child_path = '.'.join(child_path)
-                if full_child_path and full_child_path not in DREMIO_SYSTEM_SCHEMAS:
-                    schemas.add(full_child_path)
-                    logger.debug(f"Added child schema: {full_child_path}")
-                
-                # If this child is also a container, recurse into it
-                if child_type in ['CONTAINER', 'SPACE', 'SOURCE', 'FOLDER'] and current_depth < max_depth - 1:
-                    await self._add_dremio_children_recursive(client, child_path, schemas, max_depth, current_depth + 1)
+                # Only add containers/folders to schemas, not datasets/tables
+                if child_type in ['CONTAINER', 'SPACE', 'SOURCE', 'FOLDER', 'HOME']:
+                    full_child_path = '.'.join(child_path)
+                    if full_child_path and full_child_path not in DREMIO_SYSTEM_SCHEMAS:
+                        schemas.add(full_child_path)
+                        logger.debug(f"Added child schema (type: {child_type}): {full_child_path}")
+                    
+                    # Recurse into this container if we haven't reached max depth
+                    if current_depth < max_depth - 1:
+                        await self._add_dremio_children_recursive(client, child_path, schemas, max_depth, current_depth + 1)
+                else:
+                    # Skip datasets/tables/files - don't add them to schemas
+                    logger.debug(f"Skipping non-container (type: {child_type}): {'.'.join(child_path)}")
                     
         except Exception as e:
             logger.warning(f"Failed to get children for path {'.'.join(path)}: {e}")
