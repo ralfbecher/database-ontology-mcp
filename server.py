@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Startup script for the Database Ontology MCP Server."""
+"""Startup script for the Orionbelt Semantic Layer."""
 
 import sys
 import os

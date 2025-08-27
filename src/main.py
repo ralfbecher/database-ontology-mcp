@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Database Ontology MCP Server - Refactored
+Orionbelt Semantic Layer - Refactored
 
+Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience.
 A focused MCP server with 11 essential tools for database analysis with automatic ontology generation and interactive charting.
 Main tool: get_analysis_context() - provides complete schema analysis with integrated ontology.
 """
@@ -618,7 +619,7 @@ def generate_chart(
 
 @mcp.tool()
 def get_server_info() -> Dict[str, Any]:
-    """Get information about the Database Ontology MCP server and its capabilities.
+    """Get information about the Orionbelt Semantic Layer and its capabilities.
     
     Returns:
         Dictionary containing server information and available tools

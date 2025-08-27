@@ -1,6 +1,6 @@
-# Database Ontology MCP Server
+# Orionbelt Semantic Layer
 
-**MCP server for database analysis with automatic ontology generation and interactive charting - now with 9 essential tools for maximum effectiveness.**
+**Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

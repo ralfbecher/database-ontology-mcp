@@ -1,10 +1,10 @@
-"""Database Ontology MCP Server - MCP server for database ad hoc analysis with ontology support and interactive charting."""
+"""Orionbelt Semantic Layer - Ontology-based MCP server for your Text-2-SQL convenience."""
 
 __version__ = "0.3.0"
-__author__ = "Database Ontology MCP Contributors"
+__author__ = "Orionbelt Semantic Layer Contributors"
 __email__ = "contributors@example.com"
-__description__ = "MCP server for database ad hoc analysis with ontology support and interactive charting"
-__name__ = "Database Ontology MCP Server"
+__description__ = "Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience"
+__name__ = "Orionbelt Semantic Layer"
 
 # Export main components for easier imports
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo

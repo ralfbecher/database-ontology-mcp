@@ -1,4 +1,4 @@
-"""Shared instances and utilities for the Database Ontology MCP Server."""
+"""Shared instances and utilities for the Orionbelt Semantic Layer."""
 
 import logging
 from typing import Optional, Dict, Any

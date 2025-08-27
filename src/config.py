@@ -1,4 +1,4 @@
-"""Configuration management for the Database Ontology MCP Server."""
+"""Configuration management for the Orionbelt Semantic Layer."""
 
 import os
 import logging

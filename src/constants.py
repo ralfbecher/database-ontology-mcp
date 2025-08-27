@@ -1,4 +1,4 @@
-"""Constants for the Database Ontology MCP Server."""
+"""Constants for the Orionbelt Semantic Layer."""
 
 # Database connection constants
 DEFAULT_POSTGRES_PORT = 5432
