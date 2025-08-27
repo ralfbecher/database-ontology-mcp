@@ -1124,7 +1124,8 @@ class DatabaseManager:
         Returns:
             Dictionary with validation results including database-specific errors
         """
-        if not self.engine:
+        # Check for database connection (either SQLAlchemy engine or Dremio REST)
+        if not self.engine and not self._dremio_rest_connection:
             raise RuntimeError("No database connection established")
         
         validation_result = {
@@ -1182,6 +1183,10 @@ class DatabaseManager:
                     return validation_result
             
             # Step 2: Database-level syntax validation
+            # Handle Dremio REST API validation separately
+            if self._dremio_rest_connection:
+                return self._validate_dremio_syntax(query_stripped, validation_result)
+            
             with self.get_connection() as conn:
                 try:
                     if self.connection_info.get("type") == "postgresql":
@@ -1492,6 +1497,80 @@ class DatabaseManager:
             logger.error(f"Dremio query execution failed: {e}")
         
         return result_data
+    
+    def _validate_dremio_syntax(self, query: str, validation_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate SQL syntax using Dremio REST API."""
+        import asyncio
+        from .dremio_client import create_dremio_client
+        
+        async def validate_query():
+            """Validate query using Dremio EXPLAIN."""
+            try:
+                dremio_params = self._dremio_rest_connection
+                
+                # Create client with appropriate authentication
+                if dremio_params.get('uri') and dremio_params.get('pat'):
+                    # PAT-based authentication
+                    async with await create_dremio_client(
+                        uri=dremio_params['uri'],
+                        pat=dremio_params['pat']
+                    ) as client:
+                        explain_sql = f"EXPLAIN PLAN FOR {query}"
+                        result = await client.execute_query(explain_sql)
+                        return result
+                else:
+                    # Legacy authentication
+                    async with await create_dremio_client(
+                        host=dremio_params["host"],
+                        port=dremio_params["port"], 
+                        username=dremio_params["username"],
+                        password=dremio_params["password"],
+                        ssl=dremio_params["ssl"]
+                    ) as client:
+                        explain_sql = f"EXPLAIN PLAN FOR {query}"
+                        result = await client.execute_query(explain_sql)
+                        return result
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        
+        try:
+            # Handle async execution in sync context
+            try:
+                loop = asyncio.get_running_loop()
+                # Run in thread if already in async context (MCP server)
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(asyncio.run, validate_query())
+                    explain_result = future.result(timeout=30)
+            except RuntimeError:
+                # No event loop, create one
+                explain_result = asyncio.run(validate_query())
+            
+            if explain_result.get("success"):
+                validation_result["is_valid"] = True
+                return validation_result
+            else:
+                # Handle Dremio syntax error
+                error_msg = explain_result.get("error", "Unknown Dremio validation error")
+                validation_result["database_error"] = error_msg
+                validation_result["error"] = f"Dremio syntax error: {error_msg}"
+                validation_result["error_type"] = "syntax_error"
+                
+                # Add suggestions based on common Dremio errors
+                if "not found" in error_msg.lower() or "does not exist" in error_msg.lower():
+                    validation_result["suggestions"].append("Object not found - check table/view names and ensure proper qualification")
+                elif "syntax error" in error_msg.lower():
+                    validation_result["suggestions"].append("SQL syntax error - review query structure and keywords")
+                elif "validation error" in error_msg.lower():
+                    validation_result["suggestions"].append("Query validation failed - check column references and data types")
+                
+                return validation_result
+                
+        except Exception as e:
+            # If validation fails, just allow the query through with a warning
+            validation_result["is_valid"] = True
+            validation_result["warnings"].append(f"Could not validate syntax via Dremio: {str(e)}")
+            return validation_result
     
     def has_engine(self) -> bool:
         """Check if database connection exists (engine for SQL databases, REST client for Dremio)."""
