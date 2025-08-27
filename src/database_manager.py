@@ -1080,6 +1080,11 @@ class DatabaseManager:
     def sample_table_data(self, table_name: str, schema_name: Optional[str] = None, 
                          limit: int = DEFAULT_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
         """Sample data from a table for analysis with enhanced validation."""
+        # Check for Dremio REST connection first
+        if self._dremio_rest_connection:
+            return self._sample_dremio_table(table_name, schema_name, limit)
+        
+        # For traditional SQL databases, check engine
         if not self.engine:
             raise RuntimeError("No database connection established")
         
@@ -1529,6 +1534,72 @@ class DatabaseManager:
             logger.error(f"Dremio query execution failed: {e}")
         
         return result_data
+    
+    def _sample_dremio_table(self, table_name: str, schema_name: Optional[str] = None, 
+                            limit: int = DEFAULT_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
+        """Sample data from Dremio table via REST API."""
+        import asyncio
+        from .dremio_client import create_dremio_client
+        
+        # Validate and normalize limit
+        if not isinstance(limit, int) or limit < MIN_SAMPLE_LIMIT:
+            limit = DEFAULT_SAMPLE_LIMIT
+        elif limit > MAX_SAMPLE_LIMIT:
+            limit = MAX_SAMPLE_LIMIT
+            logger.warning(f"Sample limit capped at {MAX_SAMPLE_LIMIT}")
+        
+        async def fetch_sample():
+            """Fetch sample data from Dremio table."""
+            try:
+                conn = self._dremio_rest_connection
+                if conn.get('uri') and conn.get('pat'):
+                    # PAT-based authentication
+                    client = await create_dremio_client(uri=conn['uri'], pat=conn['pat'])
+                else:
+                    # Legacy authentication
+                    client = await create_dremio_client(
+                        host=conn['host'],
+                        port=conn['port'],
+                        username=conn['username'],
+                        password=conn['password'],
+                        ssl=conn.get('ssl', False)
+                    )
+                
+                async with client:
+                    # Build the query
+                    if schema_name:
+                        # Use dot notation for Dremio paths
+                        full_table_name = f'"{schema_name}"."{table_name}"'
+                    else:
+                        full_table_name = f'"{table_name}"'
+                    
+                    query = f'SELECT * FROM {full_table_name} LIMIT {limit}'
+                    
+                    # Execute query
+                    result = await client.execute_query(query, limit)
+                    
+                    if result.get('success'):
+                        return result.get('data', [])
+                    else:
+                        error_msg = result.get('error', 'Unknown error')
+                        logger.error(f"Failed to sample Dremio table {table_name}: {error_msg}")
+                        raise RuntimeError(f"Failed to sample Dremio table: {error_msg}")
+                        
+            except Exception as e:
+                logger.error(f"Error sampling Dremio table {table_name}: {e}")
+                raise RuntimeError(f"Error sampling Dremio table: {str(e)}")
+        
+        # Handle async execution in sync context
+        try:
+            loop = asyncio.get_running_loop()
+            # Run in thread if already in async context (MCP server)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, fetch_sample())
+                return future.result(timeout=30)
+        except RuntimeError:
+            # No event loop, create one
+            return asyncio.run(fetch_sample())
     
     def _validate_dremio_syntax(self, query: str, validation_result: Dict[str, Any]) -> Dict[str, Any]:
         """Validate SQL syntax using Dremio REST API."""
