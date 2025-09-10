@@ -20,21 +20,35 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "fastmcp>=2.10.0,<3.0.0",
-    "sqlalchemy>=2.0.0,<3.0.0",
-    "psycopg2-binary>=2.9.0,<3.0.0",
-    "snowflake-sqlalchemy>=1.5.0,<2.0.0",
-    "snowflake-connector-python>=3.0.0,<4.0.0",
-    "pydantic>=2.0.0,<3.0.0",
-    "python-dotenv>=1.0.0,<2.0.0",
-    "rdflib>=7.0.0,<8.0.0",
-    "owlrl>=6.0.0,<7.0.0",
-    "plotly>=5.15.0,<6.0.0",
-    "matplotlib>=3.7.0,<4.0.0",
-    "seaborn>=0.12.0,<1.0.0",
-    "pandas>=2.0.0,<3.0.0",
-    "pillow>=10.0.0,<11.0.0",
-    "aiohttp>=3.8.0,<4.0.0",
+    # Core MCP Framework - tightened version range
+    "fastmcp>=2.10.0,<2.11.0",
+    
+    # Database connectivity - more specific versions
+    "sqlalchemy>=2.0.25,<2.1.0",
+    "psycopg2-binary>=2.9.9,<2.10.0",
+    "snowflake-sqlalchemy>=1.5.1,<1.6.0",
+    "snowflake-connector-python>=3.7.0,<3.8.0",
+    
+    # Security dependencies - NEW
+    "cryptography>=41.0.7,<42.0.0",
+    
+    # Configuration and validation
+    "pydantic>=2.5.0,<2.6.0",
+    "python-dotenv>=1.0.0,<1.1.0",
+    
+    # Semantic web libraries
+    "rdflib>=7.0.0,<7.1.0",
+    "owlrl>=6.0.3,<6.1.0",
+    
+    # Visualization libraries (optional heavy dependencies)
+    "plotly>=5.17.0,<5.18.0",
+    "matplotlib>=3.8.0,<3.9.0",
+    "seaborn>=0.13.0,<0.14.0",
+    "pandas>=2.1.0,<2.2.0",
+    "pillow>=10.1.0,<10.2.0",
+    
+    # Network and async
+    "aiohttp>=3.9.0,<3.10.0",
 ]
 
 [project.urls]
@@ -55,15 +69,31 @@ path = "src/__init__.py"
 
 [tool.uv]
 dev-dependencies = [
-    "pytest>=7.0.0,<8.0.0",
+    # Testing framework
+    "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
     "pytest-cov>=4.0.0,<5.0.0",
-    "pytest-mock>=3.10.0,<4.0.0",
-    "black>=23.0.0,<24.0.0",
-    "isort>=5.12.0,<6.0.0",
-    "flake8>=6.0.0,<7.0.0",
-    "mypy>=1.5.0,<2.0.0",
-    "pre-commit>=3.0.0,<4.0.0",
+    "pytest-mock>=3.12.0,<4.0.0",
+    "pytest-benchmark>=4.0.0,<5.0.0",
+    
+    # Code formatting and linting
+    "black>=23.12.0,<24.0.0",
+    "isort>=5.13.0,<6.0.0",
+    "flake8>=7.0.0,<8.0.0",
+    "mypy>=1.8.0,<2.0.0",
+    
+    # Security tools - NEW
+    "bandit>=1.7.5,<2.0.0",
+    "safety>=3.0.0,<4.0.0",
+    
+    # Git hooks and automation
+    "pre-commit>=3.6.0,<4.0.0",
+    
+    # Integration testing with real databases
+    "testcontainers>=3.7.0,<4.0.0",
+    
+    # Performance testing
+    "locust>=2.20.0,<3.0.0",
 ]
 
 # Tool configurations
@@ -120,3 +150,16 @@ testpaths = [
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+
+# Security tools configuration
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv"]
+skips = ["B101"]  # Skip assert_used test
+
+[tool.bandit.assert_used]
+skips = ["*_test.py", "test_*.py"]
+
+# Safety configuration for vulnerability scanning
+[tool.safety]
+# Ignore specific vulnerabilities if needed (use with caution)
+ignore = []

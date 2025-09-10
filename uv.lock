@@ -715,73 +715,6 @@ wheels = [
 ]
 
 [[package]]
-name = "database-ontology-mcp"
-version = "0.3.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "fastmcp" },
-    { name = "matplotlib" },
-    { name = "owlrl" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "plotly" },
-    { name = "psycopg2-binary" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "rdflib" },
-    { name = "seaborn" },
-    { name = "snowflake-connector-python" },
-    { name = "snowflake-sqlalchemy" },
-    { name = "sqlalchemy" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "black" },
-    { name = "flake8" },
-    { name = "isort" },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0,<4.0.0" },
-    { name = "fastmcp", specifier = ">=2.10.0,<3.0.0" },
-    { name = "matplotlib", specifier = ">=3.7.0,<4.0.0" },
-    { name = "owlrl", specifier = ">=6.0.0,<7.0.0" },
-    { name = "pandas", specifier = ">=2.0.0,<3.0.0" },
-    { name = "pillow", specifier = ">=10.0.0,<11.0.0" },
-    { name = "plotly", specifier = ">=5.15.0,<6.0.0" },
-    { name = "psycopg2-binary", specifier = ">=2.9.0,<3.0.0" },
-    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0,<2.0.0" },
-    { name = "rdflib", specifier = ">=7.0.0,<8.0.0" },
-    { name = "seaborn", specifier = ">=0.12.0,<1.0.0" },
-    { name = "snowflake-connector-python", specifier = ">=3.0.0,<4.0.0" },
-    { name = "snowflake-sqlalchemy", specifier = ">=1.5.0,<2.0.0" },
-    { name = "sqlalchemy", specifier = ">=2.0.0,<3.0.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", specifier = ">=23.0.0,<24.0.0" },
-    { name = "flake8", specifier = ">=6.0.0,<7.0.0" },
-    { name = "isort", specifier = ">=5.12.0,<6.0.0" },
-    { name = "mypy", specifier = ">=1.5.0,<2.0.0" },
-    { name = "pre-commit", specifier = ">=3.0.0,<4.0.0" },
-    { name = "pytest", specifier = ">=7.0.0,<8.0.0" },
-    { name = "pytest-asyncio", specifier = ">=0.21.0,<1.0.0" },
-    { name = "pytest-cov", specifier = ">=4.0.0,<5.0.0" },
-    { name = "pytest-mock", specifier = ">=3.10.0,<4.0.0" },
-]
-
-[[package]]
 name = "distlib"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1926,6 +1859,73 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/82/af/fe2d7618d6eae6fb3a82766a44ed87cd8d6d82b4564ed1c7cfb0f6378e91/openapi_spec_validator-0.7.2.tar.gz", hash = "sha256:cc029309b5c5dbc7859df0372d55e9d1ff43e96d678b9ba087f7c56fc586f734", size = 36855, upload-time = "2025-06-07T14:48:56.299Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/27/dd/b3fd642260cb17532f66cc1e8250f3507d1e580483e209dc1e9d13bd980d/openapi_spec_validator-0.7.2-py3-none-any.whl", hash = "sha256:4bbdc0894ec85f1d1bea1d6d9c8b2c3c8d7ccaa13577ef40da9c006c9fd0eb60", size = 39713, upload-time = "2025-06-07T14:48:54.077Z" },
+]
+
+[[package]]
+name = "orionbelt-semantic-layer"
+version = "0.3.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "fastmcp" },
+    { name = "matplotlib" },
+    { name = "owlrl" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "plotly" },
+    { name = "psycopg2-binary" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "rdflib" },
+    { name = "seaborn" },
+    { name = "snowflake-connector-python" },
+    { name = "snowflake-sqlalchemy" },
+    { name = "sqlalchemy" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "black" },
+    { name = "flake8" },
+    { name = "isort" },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.8.0,<4.0.0" },
+    { name = "fastmcp", specifier = ">=2.10.0,<3.0.0" },
+    { name = "matplotlib", specifier = ">=3.7.0,<4.0.0" },
+    { name = "owlrl", specifier = ">=6.0.0,<7.0.0" },
+    { name = "pandas", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pillow", specifier = ">=10.0.0,<11.0.0" },
+    { name = "plotly", specifier = ">=5.15.0,<6.0.0" },
+    { name = "psycopg2-binary", specifier = ">=2.9.0,<3.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0,<2.0.0" },
+    { name = "rdflib", specifier = ">=7.0.0,<8.0.0" },
+    { name = "seaborn", specifier = ">=0.12.0,<1.0.0" },
+    { name = "snowflake-connector-python", specifier = ">=3.0.0,<4.0.0" },
+    { name = "snowflake-sqlalchemy", specifier = ">=1.5.0,<2.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.0,<3.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "black", specifier = ">=23.0.0,<24.0.0" },
+    { name = "flake8", specifier = ">=6.0.0,<7.0.0" },
+    { name = "isort", specifier = ">=5.12.0,<6.0.0" },
+    { name = "mypy", specifier = ">=1.5.0,<2.0.0" },
+    { name = "pre-commit", specifier = ">=3.0.0,<4.0.0" },
+    { name = "pytest", specifier = ">=7.0.0,<8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0,<1.0.0" },
+    { name = "pytest-cov", specifier = ">=4.0.0,<5.0.0" },
+    { name = "pytest-mock", specifier = ">=3.10.0,<4.0.0" },
 ]
 
 [[package]]

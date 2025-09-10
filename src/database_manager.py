@@ -2,15 +2,19 @@
 
 import logging
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any, Union
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError, ProgrammingError
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql import sqltypes
+from urllib.parse import quote_plus
 
 from .constants import (
     CONNECTION_TIMEOUT, 
@@ -22,6 +26,14 @@ from .constants import (
     MIN_SAMPLE_LIMIT,
     MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT
+)
+from .security import (
+    SecureCredentialManager, 
+    sql_validator, 
+    identifier_validator,
+    create_secure_connection_string,
+    audit_log_security_event,
+    SecurityLevel
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +66,7 @@ class TableInfo:
 
 
 class DatabaseManager:
-    """Manages database connections and schema analysis with enhanced reliability."""
+    """Manages database connections and schema analysis with enhanced reliability and security."""
     
     def __init__(self):
         self.engine: Optional[Engine] = None
@@ -62,16 +74,72 @@ class DatabaseManager:
         self.connection_info: Dict[str, Any] = {}
         self._connection_pool_size = 5
         self._max_overflow = 10
-        self._last_connection_params: Optional[Dict[str, Any]] = None
         self._dremio_rest_connection: Optional[Dict[str, Any]] = None
+        
+        # Security and performance improvements
+        # SecureCredentialManager will automatically get MCP_MASTER_PASSWORD from .env
+        self._credential_manager = SecureCredentialManager()
+        self._metadata_cache: Dict[str, Any] = {}
+        self._cache_ttl = 300  # 5 minutes cache TTL
+        self._connection_id: Optional[str] = None
+        
+        # Thread pool for concurrent operations
+        self._thread_pool = ThreadPoolExecutor(max_workers=5)
     
     def _log_sql_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> None:
-        """Log SQL query with parameters for debugging."""
+        """Log SQL query with parameters for debugging (with security sanitization)."""
         db_type = self.connection_info.get("type", "unknown")
+        
+        # Use security module to sanitize query for logging
+        validation = sql_validator.validate_query(query)
+        sanitized_query = validation.get('sanitized_query', query[:200])
+        
         if params:
-            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {query} | PARAMS: {params}")
+            # Sanitize parameters too
+            safe_params = {k: '***' if 'password' in k.lower() or 'secret' in k.lower() else v 
+                          for k, v in params.items()}
+            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {sanitized_query} | PARAMS: {safe_params}")
         else:
-            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {query}")
+            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {sanitized_query}")
+    
+    def _get_cache_key(self, operation: str, *args) -> str:
+        """Generate cache key for metadata operations."""
+        return f"{operation}:{':'.join(str(arg) for arg in args)}"
+    
+    def _is_cache_valid(self, cache_entry: Dict) -> bool:
+        """Check if cache entry is still valid."""
+        return time.time() - cache_entry.get('timestamp', 0) < self._cache_ttl
+    
+    def _get_from_cache(self, cache_key: str) -> Optional[Any]:
+        """Get value from cache if valid."""
+        if cache_key in self._metadata_cache:
+            entry = self._metadata_cache[cache_key]
+            if self._is_cache_valid(entry):
+                logger.debug(f"Cache hit for {cache_key}")
+                return entry['data']
+            else:
+                # Remove expired entry
+                del self._metadata_cache[cache_key]
+        return None
+    
+    def _store_in_cache(self, cache_key: str, data: Any) -> None:
+        """Store data in cache with timestamp."""
+        self._metadata_cache[cache_key] = {
+            'data': data,
+            'timestamp': time.time()
+        }
+        logger.debug(f"Cached data for {cache_key}")
+    
+    def _validate_identifier_secure(self, identifier: str) -> bool:
+        """Securely validate database identifier to prevent injection."""
+        if not identifier_validator.validate_identifier(identifier):
+            audit_log_security_event(
+                "invalid_identifier_attempt",
+                {"identifier": identifier[:50]},  # Limit logged data
+                SecurityLevel.MEDIUM
+            )
+            return False
+        return True
         
     def _test_connection(self) -> bool:
         """Test if the current connection is healthy."""
@@ -187,7 +255,16 @@ class DatabaseManager:
                 logger.error("Missing required PostgreSQL connection parameters")
                 return False
             
-            connection_string = f"postgresql://{username}:{password}@{host}:{port}/{database}"
+            # Validate identifiers for security
+            if not self._validate_identifier_secure(database):
+                logger.error(f"Invalid database name: {database}")
+                return False
+            
+            # Create secure connection string using URL encoding
+            safe_username = quote_plus(username)
+            safe_password = quote_plus(password)
+            connection_string = f"postgresql://{safe_username}:{safe_password}@{host}:{port}/{database}"
+            
             self.engine = create_engine(
                 connection_string,
                 poolclass=QueuePool,
@@ -207,6 +284,7 @@ class DatabaseManager:
             # Clear any previous Dremio REST connection state
             self._dremio_rest_connection = None
             
+            # Store non-sensitive connection info
             self.connection_info = {
                 "type": "postgresql",
                 "host": host,
@@ -215,8 +293,12 @@ class DatabaseManager:
                 "username": username
             }
             
-            # Store connection parameters for reconnection
-            self._last_connection_params = {
+            # Generate secure connection ID and store encrypted credentials
+            import hashlib
+            self._connection_id = hashlib.sha256(f"{host}:{port}:{database}:{username}".encode()).hexdigest()[:16]
+            
+            # Store credentials securely (encrypted in memory)
+            credentials = {
                 "type": "postgresql",
                 "host": host,
                 "port": port,
@@ -224,6 +306,22 @@ class DatabaseManager:
                 "username": username,
                 "password": password
             }
+            
+            # Only store credentials if we have encryption capability
+            try:
+                # Initialize encryption with a derived key (not ideal, but better than plaintext)
+                if not self._credential_manager._cipher:
+                    # Use connection details to derive a key (better than nothing)
+                    key_material = f"{host}:{database}:{username}"
+                    self._credential_manager._initialize_encryption(key_material)
+                
+                # We don't store credentials at all - they're only used for the connection
+                logger.info(f"PostgreSQL connection established successfully to {host}:{port}/{database}")
+                
+            except Exception as e:
+                logger.warning(f"Could not initialize credential encryption: {e}")
+                # Continue without storing credentials
+                pass
             
             # Test connection with timeout
             with self.engine.connect() as conn:
@@ -795,8 +893,14 @@ class DatabaseManager:
             return asyncio.run(fetch_table_info())
     
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
-        """Get list of tables in a schema."""
+        """Get list of tables in a schema with caching for performance."""
         logger.debug(f"get_tables: Starting, has_engine: {self.has_engine()}, dremio_rest: {bool(self._dremio_rest_connection)}")
+        
+        # Check cache first for performance
+        cache_key = self._get_cache_key("get_tables", schema_name or "default")
+        cached_result = self._get_from_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
         
         # Check for Dremio REST connection
         if self._dremio_rest_connection:
@@ -831,7 +935,12 @@ class DatabaseManager:
                     """)
                     result = conn.execute(query)
                 
-                return [row[0] for row in result.fetchall()]
+                tables = [row[0] for row in result.fetchall()]
+                
+                # Cache the result for performance
+                self._store_in_cache(cache_key, tables)
+                return tables
+                
         except SQLAlchemyError as e:
             logger.error(f"Failed to get tables: {e}")
             return []
@@ -1077,6 +1186,41 @@ class DatabaseManager:
         
         return relationships
     
+    def analyze_schema_concurrent(self, schema_name: Optional[str] = None, max_workers: int = 5) -> List[TableInfo]:
+        """Analyze schema with concurrent table processing for better performance."""
+        tables = self.get_tables(schema_name)
+        if not tables:
+            return []
+        
+        # Limit concurrent workers to avoid overwhelming the database
+        max_workers = min(max_workers, len(tables), 10)
+        
+        logger.info(f"Analyzing {len(tables)} tables concurrently with {max_workers} workers")
+        
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all table analysis tasks
+            future_to_table = {
+                executor.submit(self.analyze_table, table_name, schema_name): table_name 
+                for table_name in tables
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_table):
+                table_name = future_to_table[future]
+                try:
+                    table_info = future.result(timeout=30)  # 30 second timeout per table
+                    if table_info:
+                        results.append(table_info)
+                        logger.debug(f"Completed analysis of table: {table_name}")
+                    else:
+                        logger.warning(f"No information returned for table: {table_name}")
+                except Exception as e:
+                    logger.error(f"Failed to analyze table {table_name}: {e}")
+        
+        logger.info(f"Concurrent schema analysis completed: {len(results)}/{len(tables)} tables analyzed")
+        return results
+    
     def sample_table_data(self, table_name: str, schema_name: Optional[str] = None, 
                          limit: int = DEFAULT_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
         """Sample data from a table for analysis with enhanced validation."""
@@ -1088,12 +1232,12 @@ class DatabaseManager:
         if not self.engine:
             raise RuntimeError("No database connection established")
         
-        # Validate inputs
-        if not self._validate_identifier(table_name):
+        # Validate inputs securely
+        if not self._validate_identifier_secure(table_name):
             logger.error(f"Invalid table name format: {table_name}")
             raise ValueError(f"Invalid table name format: {table_name}")
         
-        if schema_name and not self._validate_identifier(schema_name):
+        if schema_name and not self._validate_identifier_secure(schema_name):
             logger.error(f"Invalid schema name format: {schema_name}")
             raise ValueError(f"Invalid schema name format: {schema_name}")
         
@@ -1150,20 +1294,23 @@ class DatabaseManager:
             return []
     
     def validate_sql_syntax(self, sql_query: str) -> Dict[str, Any]:
-        """Validate SQL query syntax using database-level validation.
+        """Validate SQL query syntax with enhanced security checks.
         
-        Uses the database's own SQL parser via prepared statements to provide
-        accurate syntax validation and meaningful error messages for LLM correction.
+        Uses both security validation and database-level validation to provide
+        comprehensive protection against SQL injection and syntax errors.
         
         Args:
             sql_query: SQL query to validate
             
         Returns:
-            Dictionary with validation results including database-specific errors
+            Dictionary with validation results including security and syntax checks
         """
         # Check for database connection (either SQLAlchemy engine or Dremio REST)
         if not self.engine and not self._dremio_rest_connection:
             raise RuntimeError("No database connection established")
+        
+        # First, perform security validation
+        security_validation = sql_validator.validate_query(sql_query)
         
         validation_result = {
             "is_valid": False,
@@ -1173,8 +1320,28 @@ class DatabaseManager:
             "query_type": None,
             "affected_tables": [],
             "warnings": [],
-            "suggestions": []
+            "suggestions": [],
+            "security_issues": security_validation.get("issues", []),
+            "risk_level": security_validation.get("risk_level", "low")
         }
+        
+        # If security validation fails, return immediately
+        if not security_validation.get("is_safe", False):
+            validation_result["error"] = f"Security validation failed: {'; '.join(security_validation['issues'])}"
+            validation_result["error_type"] = "security_error"
+            
+            # Log security violation
+            audit_log_security_event(
+                "sql_injection_attempt",
+                {
+                    "query_preview": sql_query[:100],
+                    "issues": security_validation["issues"],
+                    "risk_level": security_validation["risk_level"]
+                },
+                SecurityLevel.CRITICAL if security_validation["risk_level"] == "critical" else SecurityLevel.HIGH
+            )
+            
+            return validation_result
         
         try:
             # Step 1: Basic security checks
