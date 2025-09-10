@@ -1,58 +1,88 @@
-#!/usr/bin/env python3
-"""
-Orionbelt Semantic Layer - Refactored
+"""Main MCP server application using FastMCP."""
 
-Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience.
-A focused MCP server with 11 essential tools for database analysis with automatic ontology generation and interactive charting.
-Main tool: get_analysis_context() - provides complete schema analysis with integrated ontology.
-"""
-
+import asyncio
+import json
 import logging
-import shutil
-from pathlib import Path
-from typing import Dict, List, Optional, Any
-
+import os
+from typing import Optional, List, Dict, Any
+from contextlib import contextmanager
 from fastmcp import FastMCP
-import mcp.types as types
-from .config import config_manager
-from . import __version__, __name__ as SERVER_NAME, __description__
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
-# Import tool implementations from modules
-from .tools import connection as conn_tools
-from .tools import schema as schema_tools
-from .tools import ontology as ontology_tools
-from .tools import query as query_tools
-from .tools import chart as chart_tools
-from .tools import info as info_tools
+from .database_manager import DatabaseManager, TableInfo
+from .ontology_generator import OntologyGenerator
 
-# Initialize configuration and logging
-server_config = config_manager.get_server_config()
-logging.basicConfig(level=getattr(logging, server_config.log_level))
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Create and clean tmp directory for chart storage in project root
-TMP_DIR = Path(__file__).parent.parent / "tmp"
+# --- MCP Server Setup ---
 
-def setup_tmp_directory():
-    """Setup and clean temporary directory for chart storage."""
+mcp = FastMCP("Database Ontology MCP Server")
+
+# --- Dependency Management ---
+
+class ServerState:
+    """Manages server state and dependencies."""
+    
+    def __init__(self):
+        self._db_manager: Optional[DatabaseManager] = None
+        self._ontology_generator: Optional[OntologyGenerator] = None
+    
+    def get_db_manager(self) -> DatabaseManager:
+        """Get or create database manager instance."""
+        if self._db_manager is None:
+            self._db_manager = DatabaseManager()
+        return self._db_manager
+    
+    def get_ontology_generator(self, base_uri: str = "http://example.com/ontology/") -> OntologyGenerator:
+        """Get ontology generator instance."""
+        # Always create new instance to avoid state pollution
+        return OntologyGenerator(base_uri=base_uri)
+    
+    def cleanup(self):
+        """Clean up resources."""
+        if self._db_manager:
+            self._db_manager.disconnect()
+            self._db_manager = None
+        self._ontology_generator = None
+
+# Global server state
+_server_state = ServerState()
+
+# --- Error Response Helper ---
+
+class ErrorResponse(BaseModel):
+    """Standardized error response format."""
+    error: str
+    error_type: str = "unknown"
+    details: Optional[str] = None
+
+def create_error_response(error_msg: str, error_type: str = "unknown", details: Optional[str] = None) -> str:
+    """Create a standardized error response."""
+    response = ErrorResponse(error=error_msg, error_type=error_type, details=details)
+    return response.model_dump_json()
+
+def safe_execute(func, *args, **kwargs):
+    """Helper function to safely execute MCP tool functions with error handling."""
     try:
-        if TMP_DIR.exists():
-            shutil.rmtree(TMP_DIR)
-            logger.debug(f"Cleaned existing tmp directory: {TMP_DIR}")
-        TMP_DIR.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Chart tmp directory ready: {TMP_DIR.absolute()}")
+        return func(*args, **kwargs)
+    except RuntimeError as e:
+        logger.error(f"Runtime error in {func.__name__}: {e}")
+        return create_error_response(str(e), "runtime_error")
     except Exception as e:
-        logger.warning(f"Failed to setup chart tmp directory: {e}")
+        logger.error(f"Unexpected error in {func.__name__}: {e}")
+        return create_error_response(f"Internal server error: {str(e)}", "internal_error")
 
-# Setup tmp directory on startup
-setup_tmp_directory()
-
-# Initialize FastMCP
-mcp = FastMCP(SERVER_NAME)
-
-# =============================================================================
-# MCP TOOLS - Decorated functions that delegate to tool modules
-# =============================================================================
+# --- MCP Tools ---
 
 @mcp.tool()
 def connect_database(
@@ -64,119 +94,174 @@ def connect_database(
     password: Optional[str] = None,
     account: Optional[str] = None,
     warehouse: Optional[str] = None,
-    schema: Optional[str] = "PUBLIC",
-    role: Optional[str] = None,
-    ssl: Optional[bool] = False,
-    # New Dremio PAT-based authentication (following official dremio-mcp)
-    uri: Optional[str] = None,
-    pat: Optional[str] = None
-) -> Dict[str, Any]:
-    """Connect to a PostgreSQL, Snowflake, or Dremio database.
-    
-    Parameters are optional - the tool will automatically use values from .env file when parameters are not provided.
+    schema: Optional[str] = "PUBLIC"
+) -> str:
+    """Connect to a database (PostgreSQL or Snowflake) and return connection status.
     
     Args:
-        db_type: Database type ("postgresql", "snowflake", or "dremio")
-        host: Database host (PostgreSQL/Dremio, uses POSTGRES_HOST or DREMIO_HOST from .env if not provided)
-        port: Database port (PostgreSQL/Dremio, uses POSTGRES_PORT or DREMIO_PORT from .env if not provided) 
-        database: Database name (uses POSTGRES_DATABASE or SNOWFLAKE_DATABASE from .env if not provided)
-        username: Username for authentication (uses POSTGRES_USERNAME, SNOWFLAKE_USERNAME, or DREMIO_USERNAME from .env if not provided)
-        password: Password for authentication (uses POSTGRES_PASSWORD, SNOWFLAKE_PASSWORD, or DREMIO_PASSWORD from .env if not provided)
-        account: Snowflake account identifier (Snowflake only, uses SNOWFLAKE_ACCOUNT from .env if not provided)
-        warehouse: Snowflake warehouse (Snowflake only, uses SNOWFLAKE_WAREHOUSE from .env if not provided)
-        schema: Schema name (Snowflake only, uses SNOWFLAKE_SCHEMA from .env if not provided, default: "PUBLIC")
-        role: Snowflake role (Snowflake only, uses SNOWFLAKE_ROLE from .env if not provided, default: "PUBLIC")
-        ssl: Enable SSL connection (Dremio legacy only, uses DREMIO_SSL from .env if not provided, default: False for community edition compatibility)
-        uri: Dremio API endpoint (Dremio only, uses DREMIO_URI from .env if not provided) - preferred for PAT auth
-        pat: Personal Access Token (Dremio only, uses DREMIO_PAT from .env if not provided) - preferred auth method
+        db_type: Database type - either 'postgresql' or 'snowflake'
+        host: Database host (for PostgreSQL)
+        port: Database port (for PostgreSQL)
+        database: Database name
+        username: Database username
+        password: Database password
+        account: Snowflake account identifier (for Snowflake)
+        warehouse: Snowflake warehouse (for Snowflake)
+        schema: Database schema (default: PUBLIC for Snowflake, public for PostgreSQL)
     
     Returns:
-        Connection status information or error response
-        
-    Examples:
-        # Connect using .env file values
-        connect_database("postgresql")
-        connect_database("snowflake")
-        connect_database("dremio")
-        
-        # Override specific parameters
-        connect_database("postgresql", host="custom.host.com", port=5433)
-        
-        # Dremio with PAT authentication (preferred)
-        connect_database("dremio", uri="https://api.dremio.cloud", pat="your-personal-access-token")
-        
-        # Dremio legacy authentication
-        connect_database("dremio", host="dremio.company.com", port=9047, ssl=True)
+        Connection status message or error JSON
     """
-    return conn_tools.connect_database(db_type, host, port, database, username, password, account, warehouse, schema, role, ssl, uri, pat)
+    # Validate input parameters
+    if not db_type or db_type not in ["postgresql", "snowflake"]:
+        return create_error_response(
+            f"Invalid database type '{db_type}'. Use 'postgresql' or 'snowflake'.",
+            "validation_error"
+        )
+    
+    db_manager = _server_state.get_db_manager()
+    
+    if db_type == "postgresql":
+        # Validate required parameters for PostgreSQL
+        required_params = {"host": host, "port": port, "database": database, "username": username, "password": password}
+        missing_params = [k for k, v in required_params.items() if v is None]
+        if missing_params:
+            return create_error_response(
+                f"Missing required parameters for PostgreSQL: {', '.join(missing_params)}",
+                "validation_error"
+            )
+        
+        success = db_manager.connect_postgresql(
+            host=str(host),
+            port=int(port),
+            database=str(database),
+            username=str(username),
+            password=str(password)
+        )
+    elif db_type == "snowflake":
+        # Validate required parameters for Snowflake
+        required_params = {"account": account, "username": username, "password": password, "warehouse": warehouse, "database": database}
+        missing_params = [k for k, v in required_params.items() if v is None]
+        if missing_params:
+            return create_error_response(
+                f"Missing required parameters for Snowflake: {', '.join(missing_params)}",
+                "validation_error"
+            )
+        
+        success = db_manager.connect_snowflake(
+            account=str(account),
+            username=str(username),
+            password=str(password),
+            warehouse=str(warehouse),
+            database=str(database),
+            schema=schema or "PUBLIC"
+        )
+
+    if success:
+        return f"Successfully connected to {db_type} database: {database}"
+    else:
+        return create_error_response(
+            f"Failed to connect to {db_type} database: {database}",
+            "connection_error"
+        )
 
 
 @mcp.tool()
-def diagnose_connection_issue(
-    db_type: str,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-    username: Optional[str] = None,
-    ssl: Optional[bool] = None
-) -> Dict[str, Any]:
-    """Diagnose connection issues and provide comprehensive troubleshooting guidance.
-    
-    This tool provides detailed connection diagnostics with specific recommendations
-    for fixing common database connection problems. Includes connection testing steps,
-    common issues, and detailed troubleshooting guidance.
-    
-    Args:
-        db_type: Database type ("postgresql", "snowflake", or "dremio")
-        host: Database host (optional, will use config if not provided)
-        port: Database port (optional, will use config/default if not provided) 
-        username: Username (optional, will use config if not provided)
-        ssl: SSL setting for Dremio (optional, defaults to False for community edition)
-    
-    Returns:
-        Comprehensive diagnostic information with troubleshooting recommendations
-    """
-    return conn_tools.diagnose_connection_issue(db_type, host, port, username, ssl)
-
-
-@mcp.tool()
-def list_schemas() -> Dict[str, Any]:
+def list_schemas() -> List[str]:
     """Get a list of available schemas from the connected database.
     
     Returns:
         List of schema names or error response
     """
-    return schema_tools.list_schemas()
+    db_manager = _server_state.get_db_manager()
+    schemas = db_manager.get_schemas()
+    return schemas if schemas else []
 
 
 @mcp.tool()
-def get_analysis_context(
-    schema_name: Optional[str] = None
-) -> Dict[str, Any]:
-    """🌟 STEP 1: Get comprehensive analysis context for data exploration and SQL generation.
-    
-    This is the primary tool for database analysis. It provides everything needed in one call:
-    - Complete schema structure (tables, columns, relationships)  
-    - Ready-to-use JOIN conditions and column references
-    - Relationship warnings for safe aggregations
-    - SQL generation hints and best practices
-    
-    🤖 LLM WORKFLOW INSTRUCTIONS:
-    After running this tool, ALWAYS follow this sequence:
-    1. ✅ get_analysis_context (current step) - Get schema structure + sample data
-    2. ➡️ generate_semantic_descriptions(schema_analysis) - Analyze schema only
-    3. ➡️ generate_ontology - Create ontology with semantic enrichment
-    
-    IMPORTANT: This tool returns TWO separate data structures:
-    - schema_analysis: Pure schema structure (pass to generate_semantic_descriptions)
-    - sample_data: Actual data samples (optional, use only if needed for additional context)
+def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
+    """Analyze a database schema and return detailed table information.
     
     Args:
         schema_name: Name of the schema to analyze (optional)
     
     Returns:
-        Dictionary with schema_analysis (structure) and sample_data (content) separated
+        Dictionary containing tables and their detailed information or error response
     """
-    return schema_tools.get_analysis_context(schema_name)
+    db_manager = _server_state.get_db_manager()
+    tables = db_manager.get_tables(schema_name)
+    
+    all_table_info = []
+    for table_name in tables:
+        table_info = db_manager.analyze_table(table_name, schema_name)
+        if table_info:
+            # Convert dataclass to dict for JSON serialization
+            table_dict = {
+                "name": table_info.name,
+                "schema": table_info.schema,
+                "columns": [
+                    {
+                        "name": col.name,
+                        "data_type": col.data_type,
+                        "is_nullable": col.is_nullable,
+                        "is_primary_key": col.is_primary_key,
+                        "is_foreign_key": col.is_foreign_key,
+                        "foreign_key_table": col.foreign_key_table,
+                        "foreign_key_column": col.foreign_key_column,
+                        "comment": col.comment
+                    } for col in table_info.columns
+                ],
+                "primary_keys": table_info.primary_keys,
+                "foreign_keys": table_info.foreign_keys,
+                "comment": table_info.comment,
+                "row_count": table_info.row_count
+            }
+            all_table_info.append(table_dict)
+    
+    return {
+        "schema": schema_name or "default",
+        "table_count": len(all_table_info),
+        "tables": all_table_info
+    }
+
+
+@mcp.tool()
+def generate_ontology(
+    schema_name: Optional[str] = None,
+    base_uri: str = "http://example.com/ontology/"
+) -> str:
+    """Generate an RDF ontology from the database schema.
+    
+    Args:
+        schema_name: Name of the schema to generate ontology from (optional)
+        base_uri: Base URI for the ontology (default: http://example.com/ontology/)
+    
+    Returns:
+        RDF ontology in Turtle format or error response
+    """
+    # Validate base_uri
+    if not base_uri.endswith('/'):
+        base_uri += '/'
+    
+    db_manager = _server_state.get_db_manager()
+    tables = db_manager.get_tables(schema_name)
+
+    tables_info = []
+    for table_name in tables:
+        table_info = db_manager.analyze_table(table_name, schema_name)
+        if table_info:
+            tables_info.append(table_info)
+
+    if not tables_info:
+        return create_error_response(
+            f"No tables found in schema '{schema_name or 'default'}' to generate ontology",
+            "data_error"
+        )
+
+    generator = _server_state.get_ontology_generator(base_uri=base_uri)
+    ontology_ttl = generator.generate_from_schema(tables_info)
+
+    return ontology_ttl
 
 
 @mcp.tool()
@@ -184,570 +269,85 @@ def sample_table_data(
     table_name: str,
     schema_name: Optional[str] = None,
     limit: int = 10
-) -> Dict[str, Any]:
-    """Sample data from a specific table for exploration and analysis.
+) -> List[Dict[str, Any]]:
+    """Sample data from a specific table for analysis.
     
     Args:
         table_name: Name of the table to sample
-        schema_name: Name of the schema containing the table (optional)
-        limit: Maximum number of rows to return (default: 10, max: 1000)
+        schema_name: Schema containing the table (optional)
+        limit: Maximum number of rows to return (default: 10, max: 100)
     
     Returns:
-        List of dictionaries representing sample rows or error response
+        List of sample rows as dictionaries or error response
     """
-    return schema_tools.sample_table_data(table_name, schema_name, limit)
+    # Validate parameters
+    if not table_name:
+        return [{"error": "Table name is required"}]
+    
+    if limit <= 0 or limit > 100:
+        limit = 10
+    
+    db_manager = _server_state.get_db_manager()
+    sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
+    return sample_data
 
 
 @mcp.tool()
-def generate_ontology(
-    schema_name: Optional[str] = None,
-    base_uri: Optional[str] = None,
-    semantic_descriptions: Optional[str] = None
-) -> Dict[str, Any]:
-    """🎯 STEP 3: Generate a database ontology with semantic enrichment and SQL support.
-    
-    ⚠️ PREREQUISITES: Complete steps 1 and 2 FIRST:
-    1. ✅ get_analysis_context - Get schema structure
-    2. ✅ generate_semantic_descriptions - Create rich descriptions
-    3. ➡️ generate_ontology (current step) - Create enriched ontology
-    
-    This tool generates a comprehensive ontology containing:
-    - Direct database table/column references (customers.customer_id)
-    - Ready-to-use JOIN conditions (orders.customer_id = customers.customer_id)
-    - Business-friendly descriptions from semantic analysis
-    - Complete metadata (data types, constraints, row counts)
-    
-    🤖 LLM WORKFLOW INSTRUCTIONS:
-    BEFORE calling this tool, you MUST have:
-    1. Called get_analysis_context to understand the schema
-    2. Called generate_semantic_descriptions to create rich descriptions
-    3. Pass the descriptions output as semantic_descriptions parameter
-    
-    IMPORTANT: Always pass the output from generate_semantic_descriptions
-    as the semantic_descriptions parameter to enrich the ontology.
-    
-    The semantic descriptions should include:
-    
-    1. For each table, business-oriented descriptions:
-       - What entities or concepts the table represents
-       - Its role in the business domain
-       - Key relationships with other tables
-    
-    2. For each column, descriptions covering:
-       - The business meaning of the data
-       - Valid values or ranges
-       - How it relates to business processes
-    
-    3. For relationships:
-       - The nature of the relationship (1:1, 1:many, many:many)
-       - Business rules or constraints
-       - How entities interact in the domain
+def get_table_relationships(schema_name: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
+    """Get foreign key relationships between tables in a schema.
     
     Args:
-        schema_name: Name of the schema to generate ontology from (optional)
-        base_uri: Base URI for the ontology (optional, uses config default)
-        semantic_descriptions: JSON string or dict from generate_semantic_descriptions tool (REQUIRED for enrichment)
+        schema_name: Name of the schema to analyze relationships (optional)
     
     Returns:
-        Dictionary containing the RDF ontology and metadata:
-        {
-            "success": true,
-            "ontology": "RDF ontology in Turtle format",
-            "file_path": "path/to/saved/file.ttl",
-            "schema": "schema_name",
-            "table_count": 5,
-            "enriched": true/false
-        }
+        Dictionary mapping table names to their foreign key relationships or error response
     """
-    return ontology_tools.generate_ontology(schema_name, base_uri, semantic_descriptions)
-
-
-@mcp.tool()
-def load_ontology_from_file(
-    file_path: str
-) -> Dict[str, Any]:
-    """Load a previously saved or user-edited ontology from the tmp folder.
-    
-    This tool allows loading ontologies that were:
-    - Previously generated and saved by get_analysis_context()  
-    - Manually edited by users for enhanced analytical context
-    - Created externally and placed in the tmp folder
-    
-    Args:
-        file_path: Path to the ontology file (.ttl format)
-                  Can be absolute path or relative to tmp folder
-    
-    Returns:
-        Dictionary containing the loaded ontology content and metadata
-        
-    Examples:
-        # Load a previously saved ontology
-        load_ontology_from_file("ontology_public_20240826_143022.ttl")
-        
-        # Load with full path
-        load_ontology_from_file("/path/to/tmp/ontology_custom.ttl")
-    """
-    return ontology_tools.load_ontology_from_file(file_path)
-
-
-@mcp.tool()
-def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
-    """Validate SQL query syntax using database-level validation.
-    
-    Uses the database's own SQL parser to provide accurate syntax validation
-    and meaningful error messages for query correction.
-    
-    Args:
-        sql_query: SQL query to validate
-        
-    Returns:
-        Dictionary with validation results including any errors and suggestions
-    """
-    return query_tools.validate_sql_syntax(sql_query)
-
-
-@mcp.tool()
-def execute_sql_query(
-    sql_query: str, 
-    limit: int = 1000
-) -> Dict[str, Any]:
-    """Execute a validated SQL query and return results safely.
-    
-    ## 🚀 **WORKFLOW** (Only 4 Steps):
-
-    1. **Connect**: Use `connect_database()` to establish connection
-    2. **Analyze**: Use `get_analysis_context()` - gets schema + ontology + relationships automatically
-    3. **Validate**: Use `validate_sql_syntax()` before execution  
-    4. **Execute**: Use `execute_sql_query()` to run validated queries
-
-    ## 🎯 **Using the Ontology for Accurate SQL**:
-    The `get_analysis_context()` tool provides an ontology containing:
-    - **Ready-to-use SQL column references**: `customers.customer_id`, `orders.order_total`
-    - **Complete JOIN conditions**: `orders.customer_id = customers.customer_id`
-    - **Business context**: "Customer information and profile data"
-    
-    Extract these from the ontology TTL format and use them directly in your SQL queries.
-
-    ## 🚨 CRITICAL SQL TRAP PREVENTION PROTOCOL 🚨
-
-    ### MANDATORY PRE-EXECUTION CHECKLIST
-
-    **1. 🔍 RELATIONSHIP ANALYSIS (REQUIRED)**
-    - ALWAYS call `get_table_relationships()` first
-    - Identify ALL 1:many relationships in your query
-    - Flag any table appearing on "many" side of multiple relationships
-
-    **2. 🎯 FAN-TRAP DETECTION (CRITICAL)**
-
-    **IMMEDIATE RED FLAGS:**
-    - ❌ Sales + Shipments + SUM() = GUARANTEED FAN-TRAP
-    - ❌ Any fact table + dimension + aggregation = HIGH RISK
-    - ❌ Multiple LEFT JOINs + GROUP BY = DANGER ZONE
-    - ❌ Joining 3+ tables with SUM/COUNT/AVG = LIKELY INFLATED RESULTS
-
-    **PATTERN CHECK:**
-    ```
-    If query has: FROM tableA JOIN tableB JOIN tableC 
-    WHERE tableA→tableB (1:many) AND tableA→tableC (1:many)
-    Then: GUARANTEED CARTESIAN PRODUCT MULTIPLICATION
-    Result: SUM(tableA.amount) will be artificially inflated!
-    ```
-
-    **3. 🛯f MANDATORY VALIDATION**
-    - Call `validate_sql_syntax()` before execution
-    - Review warnings about query complexity
-    - Check for multiple table joins with aggregation
-
-    ## ✅ SAFE QUERY PATTERNS
-
-    ### 🔒 PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
-
-    **Best for:** Multiple fact tables (sales, shipments, returns, etc.)
-
-    ```sql
-    WITH unified_facts AS (
-        -- Sales facts
-        SELECT 
-            client_id, 
-            product_id, 
-            sales_amount as amount, 
-            0 as shipment_qty, 
-            0 as return_qty,
-            'SALES' as fact_type
-        FROM sales
-        
-        UNION ALL
-        
-        -- Shipment facts  
-        SELECT 
-            client_id, 
-            product_id, 
-            0 as amount, 
-            shipment_quantity, 
-            0 as return_qty,
-            'SHIPMENT' as fact_type
-        FROM shipments s JOIN sales sal ON s.sales_id = sal.id
-        
-        UNION ALL
-        
-        -- Return facts
-        SELECT 
-            client_id, 
-            product_id, 
-            0 as amount, 
-            0 as shipment_qty, 
-            return_quantity,
-            'RETURN' as fact_type  
-        FROM returns r JOIN sales sal ON r.sales_id = sal.id
-    )
-    SELECT 
-        client_id,
-        product_id,
-        SUM(amount) as total_sales,
-        SUM(shipment_qty) as total_shipped,
-        SUM(return_qty) as total_returned
-    FROM unified_facts 
-    GROUP BY client_id, product_id;
-    ```
-
-    **Advantages:**
-    - ✅ Natural fan-trap immunity by design
-    - ✅ Unified data model for consistent aggregation
-    - ✅ Easy to extend with additional fact types
-    - ✅ Single aggregation logic for all measures
-    - ✅ Better performance with fewer table scans
-
-    ### 🔒 PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
-
-    **Use when:** UNION approach is not suitable
-
-    ```sql
-    WITH fact1_totals AS (
-        SELECT key, SUM(amount) as total_amount 
-        FROM fact1 GROUP BY key
-    ),
-    fact2_totals AS (
-        SELECT key, SUM(quantity) as total_quantity 
-        FROM fact2 GROUP BY key
-    )
-    SELECT 
-        f1.key, 
-        f1.total_amount,
-        COALESCE(f2.total_quantity, 0) as total_quantity
-    FROM fact1_totals f1 
-    LEFT JOIN fact2_totals f2 ON f1.key = f2.key;
-    ```
-
-    ### 🔒 PATTERN 3 - DISTINCT AGGREGATION (USE CAREFULLY)
-
-    **Warning:** Only use when you fully understand the data relationships
-
-    ```sql
-    SELECT 
-        key, 
-        SUM(DISTINCT fact1.amount) as total_amount,
-        SUM(fact2.quantity) as total_quantity 
-    FROM fact1 
-    LEFT JOIN fact2 ON fact1.id = fact2.fact1_id 
-    GROUP BY key;
-    ```
-
-    ### 🔒 PATTERN 4 - WINDOW FUNCTIONS
-
-    **For:** Complex analytical queries with preserved granularity
-
-    ```sql
-    SELECT DISTINCT 
-        key, 
-        SUM(amount) OVER (PARTITION BY key) as total_amount,
-        pre_aggregated_quantity
-    FROM fact1 
-    LEFT JOIN (
-        SELECT key, SUM(qty) as pre_aggregated_quantity 
-        FROM fact2 GROUP BY key
-    ) f2 USING(key);
-    ```
-
-    ## 🔄 RESULT VALIDATION (POST-EXECUTION)
-
-    **Always verify results make business sense:**
-    - Compare totals with business expectations
-    - Verify: `SELECT SUM(amount) FROM base_table` vs your query result
-    - Check row counts are reasonable
-    - If results seem too high → likely fan-trap occurred
-
-    ## 📝 COMMON DEADLY COMBINATIONS TO AVOID
-
-    ❌ **Never do these without proper fan-trap prevention:**
-    - `sales LEFT JOIN shipments + SUM(sales.amount)`
-    - `orders LEFT JOIN order_items LEFT JOIN products + SUM(orders.total)`
-    - `customers LEFT JOIN transactions LEFT JOIN transaction_items + aggregation`
-    - Any query joining parent→child1 + parent→child2 with SUM/COUNT
-
-    ## 🎯 RELATIONSHIP ANALYSIS EXAMPLES
-
-    **SAFE (1:1 relationships):**
-    ```
-    customers → customer_profiles (1:1) ✅
-    ```
-
-    **RISKY (1:many):**
-    ```
-    customers → orders (1:many) ⚠️
-    ```
-
-    **DEADLY (fan-trap):**
-    ```
-    orders → order_items (1:many) + orders → shipments (1:many) 🚨
-    ```
-
-    **IF YOUR QUERY INCLUDES THE DEADLY PATTERN:**
-    → STOP! Rewrite using UNION approach or separate aggregation CTEs
-
-    ## 🔧 EMERGENCY FAN-TRAP FIX
-
-    If you suspect fan-trap in existing query:
-    1. **Split into UNION approach** (recommended)
-    2. **Use separate aggregations**
-    3. **Add DISTINCT in SUM()** as temporary fix
-    4. **Validate results** against source tables
-    5. **Always aggregate fact tables separately** before joining
-
-    **Remember:** Fan-traps cause SILENT DATA CORRUPTION! Your query will execute successfully but return WRONG RESULTS. The bigger the multiplication factor, the more wrong your data becomes.
-
-    ## ⚡ AUTOMATED CHECK
-
-    If your query involves more than 2 tables and includes SUM/COUNT/AVG, you MUST analyze for fan-traps before execution. No exceptions!
-
-    ## 🎯 SUCCESS CRITERIA
-
-    Only proceed with `execute_sql_query()` after ALL checks pass:
-    - [ ] Schema analyzed ✓
-    - [ ] Relationships analyzed ✓  
-    - [ ] Fan-trap patterns checked ✓
-    - [ ] Syntax validated ✓
-    - [ ] Safe aggregation pattern used ✓
-    - [ ] Results make business sense ✓
-
-    ## Security Restrictions
-
-    **ALLOWED:**
-    - SELECT statements
-    - Common Table Expressions (WITH)
-    - EXPLAIN statements
-    - Database metadata queries
-
-    **PROHIBITED:**
-    - INSERT, UPDATE, DELETE statements
-    - DDL operations (CREATE, DROP, ALTER)
-    - Transaction control (COMMIT, ROLLBACK)
-    - System functions that modify state
-    - Dynamic SQL execution
-
-    ## Performance Guidelines
-
-    **Query Optimization:**
-    - Use appropriate indexes via schema analysis
-    - Limit result sets with WHERE clauses
-    - Use EXPLAIN to understand query plans
-    - Monitor execution time warnings
-
-    **Resource Management:**
-    - Default limit: 1000 rows
-    - Maximum limit: 5000 rows  
-    - Automatic timeout protection
-    - Memory usage monitoring
-
-    ## Error Handling
-
-    **Common Error Types:**
-    - **Syntax errors**: Use `validate_sql_syntax()` first
-    - **Permission errors**: Check allowed query types
-    - **Timeout errors**: Simplify complex queries
-    - **Memory errors**: Reduce result set size
-
-    **Best Practices:**
-    - Always validate syntax before execution
-    - Start with small result sets
-    - Use LIMIT clauses appropriately
-    - Monitor execution time and warnings
-
-    ## Examples
-
-    ### Multi-Fact Query (Recommended)
-    ```sql
-    WITH unified_facts AS (
-        SELECT customer_id, product_id, sales_amount, 0 as returns, 'SALES' as type
-        FROM sales
-        UNION ALL
-        SELECT customer_id, product_id, 0, return_amount, 'RETURNS' as type  
-        FROM returns r JOIN sales s ON r.sales_id = s.id
-    )
-    SELECT customer_id, SUM(sales_amount) as net_sales, SUM(returns) as total_returns
-    FROM unified_facts GROUP BY customer_id;
-    ```
-
-    ### Safe Aggregation Query
-    ```sql
-    WITH customer_sales AS (
-        SELECT customer_id, SUM(amount) as total_sales
-        FROM sales GROUP BY customer_id
-    )
-    SELECT c.name, cs.total_sales
-    FROM customers c
-    LEFT JOIN customer_sales cs ON c.id = cs.customer_id
-    ORDER BY cs.total_sales DESC;
-    ```
-
-    Args:
-        sql_query: SQL query to execute (must pass validation first)
-        limit: Maximum number of rows to return (default: 1000, max: 5000)
-        
-    Returns:
-        Dictionary with query results and execution metadata
-    """
-    return query_tools.execute_sql_query(sql_query, limit)
-
-
-@mcp.tool()
-def generate_chart(
-    data_source: List[Dict[str, Any]],
-    chart_type: str,
-    x_column: str,
-    y_column: Optional[str] = None,
-    color_column: Optional[str] = None,
-    title: Optional[str] = None,
-    chart_library: str = "matplotlib",
-    chart_style: str = "grouped",
-    width: int = 800,
-    height: int = 600
-) -> list[types.ContentBlock]:
-    """Generate interactive charts from SQL query result data.
-    
-    📊 Supports multiple chart types with both Plotly (interactive) and Matplotlib/Seaborn (static) backends.
-    
-    Args:
-        data_source: List of dictionaries containing query results (from execute_sql_query)
-        chart_type: Type of chart ("bar", "line", "scatter", "heatmap")
-        x_column: Column name for X-axis
-        y_column: Column name for Y-axis (required for most chart types)
-        color_column: Column name for color grouping (optional)
-        title: Chart title (auto-generated if not provided)
-        chart_library: Library to use ("plotly" or "matplotlib")
-        chart_style: Chart style ("grouped", "stacked" for bar charts)
-        width: Chart width in pixels
-        height: Chart height in pixels
-    
-    Chart Types:
-        - "bar": Bar chart for discrete dimensions (supports grouped/stacked)
-        - "line": Line chart, especially good for time series
-        - "scatter": Scatter plot for correlation analysis
-        - "heatmap": Heatmap for correlation matrices or pivot data
-    
-    Returns:
-        MCP ContentBlock list with chart image for Claude Desktop display
-        
-    Examples:
-        # First get data with execute_sql_query, then create chart
-        query_results = execute_sql_query("SELECT category, sales_amount FROM sales")
-        generate_chart(
-            data_source=query_results["data"],
-            chart_type="bar",
-            x_column="category",
-            y_column="sales_amount",
-            title="Sales by Category"
-        )
-    """
-    return chart_tools.generate_chart(data_source, chart_type, x_column, y_column, color_column, title, chart_library, chart_style, width, height)
-
-
-@mcp.tool()
-def generate_semantic_descriptions(
-    schema_info: Dict[str, Any]
-) -> Dict[str, Any]:
-    """📋 STEP 2: Generate rich semantic descriptions for database schema elements.
-    
-    ⚠️ PREREQUISITE: Run get_analysis_context FIRST to obtain schema_info
-    
-    This tool helps the LLM generate meaningful, business-oriented descriptions
-    for tables, columns, and relationships based on schema analysis and sample data.
-    
-    🤖 LLM WORKFLOW INSTRUCTIONS:
-    1. ✅ get_analysis_context - Get schema structure (must be completed)
-    2. ➡️ generate_semantic_descriptions (current step) - Create rich descriptions
-    3. ➡️ generate_ontology - Apply descriptions to create enriched ontology
-    
-    Use the schema_analysis from get_analysis_context as the schema_info parameter.
-    
-    🤖 LLM INSTRUCTIONS FOR GENERATING DESCRIPTIONS:
-    
-    You MUST return the analysis in this EXACT format:
-    
-    {
-        "tables": {
-            "table_name": {
-                "business_description": "What this table represents in business terms",
-                "table_type": "transactional|reference|audit|junction|dimension|fact", 
-                "key_patterns": ["pattern1", "pattern2"],
-                "usage_notes": "How this table is typically used"
-            }
-        },
-        "columns": {
-            "table_name.column_name": {
-                "business_description": "Business meaning of this column",
-                "data_characteristics": "Valid values, ranges, patterns", 
-                "business_rules": "Constraints and rules"
-            }
-        },
-        "relationships": {
-            "from_table.column -> to_table.column": {
-                "description": "What this relationship represents",
-                "cardinality": "1:1|1:many|many:many",
-                "business_rule": "Business constraint"
-            }
-        }
-    }
-    
-    Analyze the provided schema and generate descriptions that:
-    1. Explain business purpose and domain concepts
-    2. Identify common patterns (e.g., audit fields, lookup tables, fact/dimension tables)
-    3. Describe data quality rules and constraints
-    4. Explain relationships in business terms
-    5. Note any special handling or considerations
-    
-    Consider these patterns when analyzing:
-    - Tables ending in '_log', '_audit', '_history' → Audit/tracking tables
-    - Tables with 'dim_', 'fact_' prefixes → Data warehouse patterns
-    - Columns like 'created_at', 'updated_at' → Temporal tracking
-    - Columns ending in '_id' → Foreign keys or identifiers
-    - Tables with many foreign keys → Junction/association tables
-    - Tables with few columns and '_type', '_status' → Lookup/reference tables
-    
-    Args:
-        schema_info: Dictionary from get_analysis_context's schema_analysis
-    
-    Returns:
-        Dictionary with semantic descriptions - PASS THIS to generate_ontology's 
-        semantic_descriptions parameter for enriched output
-    """
-    from .tools import semantic
-    return semantic.generate_semantic_descriptions(schema_info)
+    db_manager = _server_state.get_db_manager()
+    relationships = db_manager.get_table_relationships(schema_name)
+    return relationships
 
 
 @mcp.tool()
 def get_server_info() -> Dict[str, Any]:
-    """Get information about the Orionbelt Semantic Layer and its capabilities.
+    """Get information about the MCP server and its capabilities.
     
     Returns:
-        Dictionary containing server information and available tools
+        Dictionary containing server information
     """
-    return info_tools.get_server_info()
+    return {
+        "name": "Database Ontology MCP Server",
+        "version": "0.1.0",
+        "description": "MCP server for database schema analysis and ontology generation",
+        "supported_databases": ["postgresql", "snowflake"],
+        "features": [
+            "Database connection management",
+            "Schema analysis",
+            "Table relationship mapping",
+            "RDF/OWL ontology generation"
+        ],
+        "tools": [
+            "connect_database",
+            "list_schemas", 
+            "analyze_schema",
+            "generate_ontology",
+            "sample_table_data",
+            "get_table_relationships",
+            "get_server_info"
+        ]
+    }
+
+
+# --- Cleanup on shutdown ---
+
+def cleanup_server():
+    """Clean up server resources."""
+    _server_state.cleanup()
 
 
 if __name__ == "__main__":
-    # Minimal startup logging to reduce noise
-    logger.info(f"Starting {SERVER_NAME} v{__version__}")
-    logger.debug(f"Configuration: log_level={server_config.log_level}, base_uri={server_config.ontology_base_uri}")
-    logger.debug("MCP server ready with 12 tools for PostgreSQL, Snowflake, and Dremio")
-    
-    mcp.run()
+    try:
+        mcp.run()
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested")
+    finally:
+        cleanup_server()

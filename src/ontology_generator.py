@@ -1,31 +1,24 @@
 """Ontology generator for creating RDF graphs from database schemas."""
 
-import json
-import logging
-import os
-import re
-from typing import List, Dict, Any, Optional
-
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, OWL, XSD
-
-from .constants import DEFAULT_BASE_URI, ONTOLOGY_TITLE, ONTOLOGY_DESCRIPTION
+from typing import List, Dict, Any, Optional
+import logging
+import re
 from .database_manager import TableInfo, ColumnInfo
 
 logger = logging.getLogger(__name__)
 
-class OntologyGenerator:
-    """Generates an ontology from a database schema with comprehensive database annotations."""
+# Define namespaces
+EX = Namespace("http://example.com/ontology/")
 
-    def __init__(self, base_uri: str = DEFAULT_BASE_URI):
+class OntologyGenerator:
+    """Generates an ontology from a database schema."""
+
+    def __init__(self, base_uri: str = "http://example.com/ontology/"):
         self.graph = Graph()
         self.base_uri = Namespace(base_uri)
-        
-        # Define custom namespace for database-specific annotations
-        self.db_ns = Namespace(f"{base_uri}db/")
-        
-        self.graph.bind("ns", self.base_uri)
-        self.graph.bind("db", self.db_ns)
+        self.graph.bind("ex", self.base_uri)
         self.graph.bind("rdf", RDF)
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("owl", OWL)
@@ -36,8 +29,8 @@ class OntologyGenerator:
         # Add ontology metadata
         ontology_uri = self.base_uri[""]
         self.graph.add((ontology_uri, RDF.type, OWL.Ontology))
-        self.graph.add((ontology_uri, RDFS.label, Literal(ONTOLOGY_TITLE)))
-        self.graph.add((ontology_uri, RDFS.comment, Literal(ONTOLOGY_DESCRIPTION)))
+        self.graph.add((ontology_uri, RDFS.label, Literal("Database Schema Ontology")))
+        self.graph.add((ontology_uri, RDFS.comment, Literal("Ontology generated from database schema")))
         
         for table_info in tables_info:
             self._add_table_to_ontology(table_info)
@@ -45,30 +38,15 @@ class OntologyGenerator:
         return self.graph.serialize(format="turtle")
 
     def _add_table_to_ontology(self, table_info: TableInfo):
-        """Add a single table and its columns to the ontology with comprehensive database annotations."""
+        """Add a single table and its columns to the ontology."""
         # Create proper URI for table class
         table_uri = self.base_uri[self._clean_name(table_info.name)]
 
         # Define table as a class
         self.graph.add((table_uri, RDF.type, OWL.Class))
         self.graph.add((table_uri, RDFS.label, Literal(table_info.name)))
-        
-        # Add comprehensive database-specific annotations
-        self.graph.add((table_uri, self.db_ns.tableName, Literal(table_info.name)))
-        self.graph.add((table_uri, self.db_ns.schemaName, Literal(table_info.schema)))
-        
-        if table_info.row_count is not None:
-            self.graph.add((table_uri, self.db_ns.rowCount, Literal(table_info.row_count)))
-            
         if table_info.comment:
             self.graph.add((table_uri, RDFS.comment, Literal(table_info.comment)))
-            
-        # Business descriptions should be added via LLM enrichment or apply_semantic_descriptions
-            
-        # Add primary key information
-        if table_info.primary_keys:
-            for pk in table_info.primary_keys:
-                self.graph.add((table_uri, self.db_ns.primaryKey, Literal(pk)))
 
         # Add columns as properties
         for column in table_info.columns:
@@ -79,7 +57,7 @@ class OntologyGenerator:
             self._add_relationship_to_ontology(table_uri, fk, table_info.name)
 
     def _add_column_to_ontology(self, table_uri: URIRef, column: ColumnInfo, table_name: str):
-        """Add a column as a data property to the ontology with comprehensive database annotations."""
+        """Add a column as a data property to the ontology."""
         # Create proper property URI
         prop_name = f"{self._clean_name(table_name)}_{self._clean_name(column.name)}"
         prop_uri = self.base_uri[prop_name]
@@ -95,24 +73,10 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.domain, table_uri))
         self.graph.add((prop_uri, RDFS.label, Literal(column.name)))
         
-        # Add comprehensive database-specific annotations
-        self.graph.add((prop_uri, self.db_ns.columnName, Literal(column.name)))
-        self.graph.add((prop_uri, self.db_ns.tableName, Literal(table_name)))
-        self.graph.add((prop_uri, self.db_ns.sqlDataType, Literal(column.data_type)))
-        self.graph.add((prop_uri, self.db_ns.isNullable, Literal(column.is_nullable)))
-        self.graph.add((prop_uri, self.db_ns.isPrimaryKey, Literal(column.is_primary_key)))
-        self.graph.add((prop_uri, self.db_ns.isForeignKey, Literal(column.is_foreign_key)))
-        
-        # Add SQL query generation hints
-        full_column_ref = f"{table_name}.{column.name}"
-        self.graph.add((prop_uri, self.db_ns.sqlReference, Literal(full_column_ref)))
-        
         # Map SQL data types to proper XSD types
         xsd_type = self._map_sql_to_xsd(column.data_type)
         if xsd_type:
             self.graph.add((prop_uri, RDFS.range, xsd_type))
-        
-        # Business descriptions should be added via LLM enrichment or apply_semantic_descriptions
         
         # Add cardinality constraints for primary keys and nullable fields
         if column.is_primary_key:
@@ -134,7 +98,7 @@ class OntologyGenerator:
             self.graph.add((prop_uri, RDFS.comment, Literal(column.comment)))
 
     def _add_relationship_to_ontology(self, table_uri: URIRef, fk: Dict[str, str], table_name: str):
-        """Add a foreign key relationship as an object property with comprehensive database annotations."""
+        """Add a foreign key relationship as an object property."""
         # Create descriptive relationship name
         rel_name = f"{self._clean_name(table_name)}_has_{self._clean_name(fk['referenced_table'])}"
         prop_uri = self.base_uri[rel_name]
@@ -145,18 +109,6 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.range, referenced_table_uri))
         self.graph.add((prop_uri, RDFS.label, Literal(f"{table_name} has {fk['referenced_table']}")))
         
-        # Add comprehensive database-specific annotations for foreign keys
-        self.graph.add((prop_uri, self.db_ns.foreignKeyColumn, Literal(fk['column'])))
-        self.graph.add((prop_uri, self.db_ns.referencedTable, Literal(fk['referenced_table'])))
-        self.graph.add((prop_uri, self.db_ns.referencedColumn, Literal(fk['referenced_column'])))
-        
-        # Add SQL join condition
-        join_condition = f"{table_name}.{fk['column']} = {fk['referenced_table']}.{fk['referenced_column']}"
-        self.graph.add((prop_uri, self.db_ns.sqlJoinCondition, Literal(join_condition)))
-        
-        # Add relationship type annotation
-        self.graph.add((prop_uri, self.db_ns.relationshipType, Literal("many_to_one")))
-        
         # Add inverse relationship
         inverse_rel_name = f"{self._clean_name(fk['referenced_table'])}_referenced_by_{self._clean_name(table_name)}"
         inverse_prop_uri = self.base_uri[inverse_rel_name]
@@ -165,24 +117,17 @@ class OntologyGenerator:
         self.graph.add((inverse_prop_uri, RDFS.range, table_uri))
         self.graph.add((inverse_prop_uri, RDFS.label, Literal(f"{fk['referenced_table']} referenced by {table_name}")))
         
-        # Add database annotations for inverse relationship
-        self.graph.add((inverse_prop_uri, self.db_ns.relationshipType, Literal("one_to_many")))
-        
         # Link them as inverses
         self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
 
     def _clean_name(self, name: str) -> str:
         """Clean a name to make it suitable for URIs."""
-        if not name:
-            return 'unnamed'
-        
         # Replace spaces and special characters with underscores
+        import re
         cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-        
         # Ensure it starts with a letter or underscore
         if cleaned and not (cleaned[0].isalpha() or cleaned[0] == '_'):
             cleaned = '_' + cleaned
-        
         return cleaned or 'unnamed'
 
     def _map_sql_to_xsd(self, sql_type: str) -> Optional[URIRef]:
@@ -236,217 +181,6 @@ class OntologyGenerator:
         # Default to string for unknown types
         logger.warning(f"Unknown SQL type '{sql_type}', mapping to xsd:string")
         return XSD.string
-    
 
-    def enrich_with_llm(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> str:
-        """Enriches the ontology with LLM insights via MCP tools."""
-        logger.info("LLM enrichment will be handled by MCP prompts and tools.")
-        logger.info("Use the 'get_enrichment_data' and 'apply_enrichment' MCP tools for enrichment.")
-        
-        # For now, return the basic ontology
-        # The enrichment will be handled through MCP tools
-        return self.graph.serialize(format="turtle")
 
-    def get_enrichment_data(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
-        """Prepares structured data for LLM enrichment analysis."""
-        schema_summary = []
-        for table in schema_info:
-            columns = []
-            for col in table.columns:
-                col_info = {
-                    "name": col.name,
-                    "data_type": col.data_type,
-                    "is_primary_key": col.is_primary_key,
-                    "is_foreign_key": col.is_foreign_key,
-                    "is_nullable": col.is_nullable,
-                    "comment": col.comment
-                }
-                if col.is_foreign_key:
-                    col_info["foreign_key_table"] = col.foreign_key_table
-                    col_info["foreign_key_column"] = col.foreign_key_column
-                columns.append(col_info)
-            
-            table_dict = {
-                "table_name": table.name,
-                "schema": table.schema,
-                "columns": columns,
-                "foreign_keys": table.foreign_keys,
-                "row_count": table.row_count,
-                "comment": table.comment
-            }
-            if data_samples.get(table.name):
-                # Limit sample data to avoid token limit issues
-                table_dict["sample_data"] = data_samples[table.name][:3]
-            schema_summary.append(table_dict)
-
-        return {
-            "schema_data": schema_summary,
-            "instructions": {
-                "task": "Enrich a basic RDF ontology generated from a relational database schema",
-                "expected_format": {
-                    "classes": [
-                        {
-                            "original_name": "<original_table_name>",
-                            "suggested_name": "<SuggestedClassNameInPascalCase>",
-                            "description": "<A detailed description of the class's purpose>"
-                        }
-                    ],
-                    "properties": [
-                        {
-                            "table_name": "<table_name>",
-                            "original_name": "<original_column_name>",
-                            "suggested_name": "<suggestedPropertyNameInCamelCase>",
-                            "description": "<A detailed description of the property>"
-                        }
-                    ],
-                    "relationships": [
-                        {
-                            "from_table": "<table_with_fk>",
-                            "to_table": "<referenced_table>",
-                            "suggested_name": "<suggestedRelationshipNameInCamelCase>",
-                            "description": "<A detailed description of what the relationship represents>"
-                        }
-                    ]
-                },
-                "guidelines": [
-                    "Class names should be in PascalCase",
-                    "Property and relationship names should be in camelCase",
-                    "Descriptions should be clear, concise, and explain the semantic meaning",
-                    "If you have no suggestion for a name, use the original name but still provide a description",
-                    "Only include elements for which you can provide a meaningful description or a better name",
-                    "Focus on the most important tables and relationships first"
-                ]
-            }
-        }
-
-    def apply_enrichment(self, enrichment_data: Dict[str, Any]):
-        """Applies the LLM's suggestions to the RDF graph."""
-        logger.info("Applying LLM enrichment to the ontology graph...")
-
-        # Update class labels and comments
-        for class_sugg in enrichment_data.get("classes", []):
-            original_uri = self.base_uri[self._clean_name(class_sugg['original_name'])]
-            if (original_uri, RDF.type, OWL.Class) in self.graph:
-                new_label = class_sugg.get('suggested_name', class_sugg['original_name'])
-                self.graph.set((original_uri, RDFS.label, Literal(new_label)))
-                if class_sugg.get('description'):
-                    self.graph.add((original_uri, RDFS.comment, Literal(class_sugg['description'])))
-
-        # Update property labels and comments
-        for prop_sugg in enrichment_data.get("properties", []):
-            table_name = prop_sugg['table_name']
-            original_prop_name = f"{self._clean_name(table_name)}_{self._clean_name(prop_sugg['original_name'])}"
-            prop_uri = self.base_uri[original_prop_name]
-            if (prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph:
-                new_label = prop_sugg.get('suggested_name', prop_sugg['original_name'])
-                self.graph.set((prop_uri, RDFS.label, Literal(new_label)))
-                if prop_sugg.get('description'):
-                    self.graph.add((prop_uri, RDFS.comment, Literal(prop_sugg['description'])))
-
-        # Update relationship labels and comments
-        for rel_sugg in enrichment_data.get("relationships", []):
-            from_table = self._clean_name(rel_sugg['from_table'])
-            to_table = self._clean_name(rel_sugg['to_table'])
-            original_rel_name = f"{from_table}_has_{to_table}"
-            rel_uri = self.base_uri[original_rel_name]
-            if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
-                new_label = rel_sugg.get('suggested_name', original_rel_name)
-                self.graph.set((rel_uri, RDFS.label, Literal(new_label)))
-                if rel_sugg.get('description'):
-                    self.graph.add((rel_uri, RDFS.comment, Literal(rel_sugg['description'])))
-        
-        logger.info("Finished applying LLM enrichment.")
-
-    def apply_semantic_descriptions(self, descriptions: Dict[str, Any]):
-        """Apply LLM-generated semantic descriptions to the ontology.
-        
-        This method allows applying rich, context-aware descriptions generated
-        by the LLM through the generate_semantic_descriptions tool.
-        
-        Args:
-            descriptions: Dictionary containing semantic descriptions for:
-                - tables: Business descriptions for each table
-                - columns: Business meanings for each column
-                - relationships: Descriptions of foreign key relationships
-        """
-        logger.info("Applying LLM-generated semantic descriptions to ontology")
-        
-        # Apply table descriptions
-        if "tables" in descriptions:
-            for table_name, table_desc in descriptions["tables"].items():
-                table_uri = self.base_uri[self._clean_name(table_name)]
-                if (table_uri, RDF.type, OWL.Class) in self.graph:
-                    if "business_description" in table_desc:
-                        # Remove existing basic description if present
-                        self.graph.remove((table_uri, self.db_ns.businessDescription, None))
-                        # Add new rich description
-                        self.graph.add((table_uri, self.db_ns.businessDescription, 
-                                      Literal(table_desc["business_description"])))
-                    
-                    if "table_type" in table_desc:
-                        self.graph.add((table_uri, self.db_ns.tableType, 
-                                      Literal(table_desc["table_type"])))
-                    
-                    if "usage_notes" in table_desc:
-                        self.graph.add((table_uri, self.db_ns.usageNotes, 
-                                      Literal(table_desc["usage_notes"])))
-        
-        # Apply column descriptions
-        if "columns" in descriptions:
-            for column_ref, column_desc in descriptions["columns"].items():
-                # Parse table.column format
-                if "." in column_ref:
-                    table_name, column_name = column_ref.split(".", 1)
-                    prop_name = f"{self._clean_name(table_name)}_{self._clean_name(column_name)}"
-                    prop_uri = self.base_uri[prop_name]
-                    
-                    if ((prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph or
-                        (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph):
-                        
-                        if "business_description" in column_desc:
-                            # Remove existing basic description if present
-                            self.graph.remove((prop_uri, self.db_ns.businessDescription, None))
-                            # Add new rich description
-                            self.graph.add((prop_uri, self.db_ns.businessDescription, 
-                                          Literal(column_desc["business_description"])))
-                        
-                        if "data_characteristics" in column_desc:
-                            self.graph.add((prop_uri, self.db_ns.dataCharacteristics, 
-                                          Literal(column_desc["data_characteristics"])))
-                        
-                        if "business_rules" in column_desc:
-                            self.graph.add((prop_uri, self.db_ns.businessRules, 
-                                          Literal(column_desc["business_rules"])))
-        
-        # Apply relationship descriptions
-        if "relationships" in descriptions:
-            for rel_key, rel_desc in descriptions["relationships"].items():
-                # Parse relationship key format
-                # Expected format: "from_table.column -> to_table.column"
-                if " -> " in rel_key:
-                    from_part, to_part = rel_key.split(" -> ")
-                    from_table = from_part.split(".")[0] if "." in from_part else from_part
-                    to_table = to_part.split(".")[0] if "." in to_part else to_part
-                    
-                    rel_name = f"{self._clean_name(from_table)}_has_{self._clean_name(to_table)}"
-                    rel_uri = self.base_uri[rel_name]
-                    
-                    if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
-                        if "description" in rel_desc:
-                            self.graph.add((rel_uri, self.db_ns.relationshipDescription, 
-                                          Literal(rel_desc["description"])))
-                        
-                        if "cardinality" in rel_desc:
-                            self.graph.add((rel_uri, self.db_ns.cardinality, 
-                                          Literal(rel_desc["cardinality"])))
-                        
-                        if "business_rule" in rel_desc:
-                            self.graph.add((rel_uri, self.db_ns.businessRule, 
-                                          Literal(rel_desc["business_rule"])))
-        
-        logger.info("Finished applying semantic descriptions")
-    
-    def serialize_ontology(self) -> str:
-        """Serialize the current ontology to Turtle format."""
-        return self.graph.serialize(format="turtle")
 
