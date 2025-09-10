@@ -65,7 +65,7 @@ def print_startup_info():
     logger.info("")
 
 def main():
-    """Start the enhanced MCP server."""    
+    """Start the Orionbelt Semantic Layer MCP server."""    
     try:
         # Setup signal handlers for graceful shutdown
         setup_signal_handlers()
@@ -73,7 +73,7 @@ def main():
         # Print startup information
         print_startup_info()
         
-        logger.info("🚀 Starting MCP server with stdio transport...")
+        logger.info("🚀 Starting Orionbelt Semantic Layer MCP server with stdio transport...")
         logger.info("📡 Server ready for stdio MCP protocol messages")
         
         # Start the server with stdio transport (standard for Claude Desktop)

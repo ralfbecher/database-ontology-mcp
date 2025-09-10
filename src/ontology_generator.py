@@ -63,10 +63,7 @@ class OntologyGenerator:
         if table_info.comment:
             self.graph.add((table_uri, RDFS.comment, Literal(table_info.comment)))
             
-        # Add semantic business description based on table name patterns
-        business_desc = self._generate_table_business_description(table_info.name)
-        if business_desc:
-            self.graph.add((table_uri, self.db_ns.businessDescription, Literal(business_desc)))
+        # Business descriptions should be added via LLM enrichment or apply_semantic_descriptions
             
         # Add primary key information
         if table_info.primary_keys:
@@ -115,10 +112,7 @@ class OntologyGenerator:
         if xsd_type:
             self.graph.add((prop_uri, RDFS.range, xsd_type))
         
-        # Add semantic business description based on column name patterns
-        business_desc = self._generate_column_business_description(column.name)
-        if business_desc:
-            self.graph.add((prop_uri, self.db_ns.businessDescription, Literal(business_desc)))
+        # Business descriptions should be added via LLM enrichment or apply_semantic_descriptions
         
         # Add cardinality constraints for primary keys and nullable fields
         if column.is_primary_key:
@@ -243,72 +237,6 @@ class OntologyGenerator:
         logger.warning(f"Unknown SQL type '{sql_type}', mapping to xsd:string")
         return XSD.string
     
-    def _generate_table_business_description(self, table_name: str) -> str:
-        """Generate a business-friendly description for a table based on naming patterns."""
-        name_lower = table_name.lower()
-        
-        # Convert underscores to spaces and capitalize
-        readable_name = table_name.replace('_', ' ').title()
-        
-        # Generate description based on common patterns
-        if 'customer' in name_lower:
-            return f"Customer information and profile data"
-        elif 'order' in name_lower:
-            return f"Order transaction records"
-        elif 'product' in name_lower:
-            return f"Product catalog and inventory information"
-        elif 'user' in name_lower:
-            return f"User account and authentication data"
-        elif 'invoice' in name_lower:
-            return f"Invoice and billing information"
-        elif 'payment' in name_lower:
-            return f"Payment transaction records"
-        elif 'address' in name_lower:
-            return f"Address and location information"
-        elif 'category' in name_lower:
-            return f"Classification and categorization data"
-        elif 'item' in name_lower:
-            return f"Item details and specifications"
-        elif 'transaction' in name_lower:
-            return f"Transaction history and records"
-        elif 'log' in name_lower or 'audit' in name_lower:
-            return f"System logs and audit trail data"
-        else:
-            return f"Data table for {readable_name.lower()}"
-    
-    def _generate_column_business_description(self, column_name: str) -> str:
-        """Generate a business-friendly description for a column based on naming patterns."""
-        name_lower = column_name.lower()
-        
-        if 'id' in name_lower:
-            entity_name = column_name.replace('_id', '').replace('_', ' ')
-            return f"Unique identifier for {entity_name}"
-        elif 'name' in name_lower:
-            return "Name or title"
-        elif 'email' in name_lower:
-            return "Email address"
-        elif 'phone' in name_lower:
-            return "Phone number"
-        elif 'address' in name_lower:
-            return "Physical address"
-        elif 'date' in name_lower or 'time' in name_lower:
-            return "Date/time information"
-        elif 'amount' in name_lower or 'price' in name_lower or 'cost' in name_lower:
-            return "Monetary or quantity value"
-        elif 'count' in name_lower or 'quantity' in name_lower:
-            return "Numeric count or quantity"
-        elif 'status' in name_lower or 'state' in name_lower:
-            return "Status or state indicator"
-        elif 'description' in name_lower:
-            return "Descriptive text"
-        elif 'code' in name_lower:
-            return "Code or identifier"
-        elif 'type' in name_lower:
-            return "Type classification"
-        elif 'flag' in name_lower:
-            return "Boolean flag or indicator"
-        else:
-            return f"{column_name.replace('_', ' ').title()}"
 
     def enrich_with_llm(self, schema_info: List[TableInfo], data_samples: Dict[str, List[Dict[str, Any]]]) -> str:
         """Enriches the ontology with LLM insights via MCP tools."""
@@ -429,6 +357,95 @@ class OntologyGenerator:
         
         logger.info("Finished applying LLM enrichment.")
 
+    def apply_semantic_descriptions(self, descriptions: Dict[str, Any]):
+        """Apply LLM-generated semantic descriptions to the ontology.
+        
+        This method allows applying rich, context-aware descriptions generated
+        by the LLM through the generate_semantic_descriptions tool.
+        
+        Args:
+            descriptions: Dictionary containing semantic descriptions for:
+                - tables: Business descriptions for each table
+                - columns: Business meanings for each column
+                - relationships: Descriptions of foreign key relationships
+        """
+        logger.info("Applying LLM-generated semantic descriptions to ontology")
+        
+        # Apply table descriptions
+        if "tables" in descriptions:
+            for table_name, table_desc in descriptions["tables"].items():
+                table_uri = self.base_uri[self._clean_name(table_name)]
+                if (table_uri, RDF.type, OWL.Class) in self.graph:
+                    if "business_description" in table_desc:
+                        # Remove existing basic description if present
+                        self.graph.remove((table_uri, self.db_ns.businessDescription, None))
+                        # Add new rich description
+                        self.graph.add((table_uri, self.db_ns.businessDescription, 
+                                      Literal(table_desc["business_description"])))
+                    
+                    if "table_type" in table_desc:
+                        self.graph.add((table_uri, self.db_ns.tableType, 
+                                      Literal(table_desc["table_type"])))
+                    
+                    if "usage_notes" in table_desc:
+                        self.graph.add((table_uri, self.db_ns.usageNotes, 
+                                      Literal(table_desc["usage_notes"])))
+        
+        # Apply column descriptions
+        if "columns" in descriptions:
+            for column_ref, column_desc in descriptions["columns"].items():
+                # Parse table.column format
+                if "." in column_ref:
+                    table_name, column_name = column_ref.split(".", 1)
+                    prop_name = f"{self._clean_name(table_name)}_{self._clean_name(column_name)}"
+                    prop_uri = self.base_uri[prop_name]
+                    
+                    if ((prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph or
+                        (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph):
+                        
+                        if "business_description" in column_desc:
+                            # Remove existing basic description if present
+                            self.graph.remove((prop_uri, self.db_ns.businessDescription, None))
+                            # Add new rich description
+                            self.graph.add((prop_uri, self.db_ns.businessDescription, 
+                                          Literal(column_desc["business_description"])))
+                        
+                        if "data_characteristics" in column_desc:
+                            self.graph.add((prop_uri, self.db_ns.dataCharacteristics, 
+                                          Literal(column_desc["data_characteristics"])))
+                        
+                        if "business_rules" in column_desc:
+                            self.graph.add((prop_uri, self.db_ns.businessRules, 
+                                          Literal(column_desc["business_rules"])))
+        
+        # Apply relationship descriptions
+        if "relationships" in descriptions:
+            for rel_key, rel_desc in descriptions["relationships"].items():
+                # Parse relationship key format
+                # Expected format: "from_table.column -> to_table.column"
+                if " -> " in rel_key:
+                    from_part, to_part = rel_key.split(" -> ")
+                    from_table = from_part.split(".")[0] if "." in from_part else from_part
+                    to_table = to_part.split(".")[0] if "." in to_part else to_part
+                    
+                    rel_name = f"{self._clean_name(from_table)}_has_{self._clean_name(to_table)}"
+                    rel_uri = self.base_uri[rel_name]
+                    
+                    if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
+                        if "description" in rel_desc:
+                            self.graph.add((rel_uri, self.db_ns.relationshipDescription, 
+                                          Literal(rel_desc["description"])))
+                        
+                        if "cardinality" in rel_desc:
+                            self.graph.add((rel_uri, self.db_ns.cardinality, 
+                                          Literal(rel_desc["cardinality"])))
+                        
+                        if "business_rule" in rel_desc:
+                            self.graph.add((rel_uri, self.db_ns.businessRule, 
+                                          Literal(rel_desc["business_rule"])))
+        
+        logger.info("Finished applying semantic descriptions")
+    
     def serialize_ontology(self) -> str:
         """Serialize the current ontology to Turtle format."""
         return self.graph.serialize(format="turtle")

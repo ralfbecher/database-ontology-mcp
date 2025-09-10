@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 def generate_ontology(
     schema_name: Optional[str] = None,
     base_uri: Optional[str] = None,
-    enrich_llm: bool = False
-) -> str:
+    semantic_descriptions: Optional[str] = None
+) -> Dict[str, Any]:
     """Generate ontology implementation. Full documentation in main.py."""
     try:
         db_manager = get_db_manager()
@@ -59,8 +59,75 @@ def generate_ontology(
             generator = OntologyGenerator(base_uri=uri)
             ontology_ttl = generator.generate_from_schema(tables_info)
             
-            logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
-            return ontology_ttl
+            # Track whether descriptions were applied
+            enriched = False
+            
+            # Apply semantic descriptions if provided
+            if semantic_descriptions:
+                logger.info("Applying semantic descriptions to ontology")
+                try:
+                    # Handle JSON string or dictionary
+                    descriptions_dict = semantic_descriptions
+                    if isinstance(semantic_descriptions, str):
+                        import json
+                        try:
+                            descriptions_dict = json.loads(semantic_descriptions)
+                            logger.debug("Parsed JSON string semantic descriptions")
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse semantic descriptions JSON: {e}. Using basic ontology.")
+                            descriptions_dict = None
+                    
+                    if descriptions_dict and isinstance(descriptions_dict, dict):
+                        # Check if it has the expected structure (tables, columns, relationships)
+                        if any(key in descriptions_dict for key in ['tables', 'columns', 'relationships']):
+                            generator.apply_semantic_descriptions(descriptions_dict)
+                            ontology_ttl = generator.serialize_ontology()
+                            enriched = True
+                            logger.info("Successfully applied semantic descriptions to ontology")
+                        else:
+                            logger.warning("Semantic descriptions provided but not in expected format. Using basic ontology.")
+                            logger.debug(f"Received format keys: {list(descriptions_dict.keys())}")
+                    else:
+                        logger.warning("Semantic descriptions should be a dictionary or valid JSON string. Using basic ontology.")
+                except Exception as e:
+                    logger.warning(f"Failed to apply semantic descriptions: {e}. Using basic ontology.")
+            
+            # Save ontology to tmp folder for user access
+            ontology_file_path = None
+            try:
+                TMP_DIR = Path(__file__).parent.parent.parent / "tmp"
+                TMP_DIR.mkdir(exist_ok=True)  # Ensure tmp directory exists
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
+                ontology_filename = f"ontology_{schema_safe}_{timestamp}.ttl"
+                ontology_file_path = TMP_DIR / ontology_filename
+                
+                with open(ontology_file_path, 'w', encoding='utf-8') as f:
+                    f.write(ontology_ttl)
+                
+                logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
+                logger.info(f"Saved ontology to: {ontology_file_path}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to save ontology to file: {e}")
+                ontology_file_path = None
+            
+            # Return structured response
+            return {
+                "success": True,
+                "ontology": ontology_ttl,
+                "file_path": str(ontology_file_path) if ontology_file_path else None,
+                "schema": schema_name or "default",
+                "table_count": len(tables_info),
+                "enriched": enriched,
+                "base_uri": uri,
+                "generation_info": {
+                    "timestamp": datetime.now().isoformat(),
+                    "has_semantic_descriptions": bool(semantic_descriptions),
+                    "applied_enrichment": enriched
+                }
+            }
             
         except RuntimeError as e:
             return create_error_response(

@@ -150,26 +150,33 @@ def list_schemas() -> Dict[str, Any]:
 
 @mcp.tool()
 def get_analysis_context(
-    schema_name: Optional[str] = None,
-    include_ontology: bool = True
+    schema_name: Optional[str] = None
 ) -> Dict[str, Any]:
-    """🌟 MAIN TOOL: Get comprehensive analysis context for data exploration and SQL generation.
+    """🌟 STEP 1: Get comprehensive analysis context for data exploration and SQL generation.
     
     This is the primary tool for database analysis. It provides everything needed in one call:
     - Complete schema structure (tables, columns, relationships)  
-    - Automatic ontology generation with SQL references
     - Ready-to-use JOIN conditions and column references
     - Relationship warnings for safe aggregations
     - SQL generation hints and best practices
     
+    🤖 LLM WORKFLOW INSTRUCTIONS:
+    After running this tool, ALWAYS follow this sequence:
+    1. ✅ get_analysis_context (current step) - Get schema structure + sample data
+    2. ➡️ generate_semantic_descriptions(schema_analysis) - Analyze schema only
+    3. ➡️ generate_ontology - Create ontology with semantic enrichment
+    
+    IMPORTANT: This tool returns TWO separate data structures:
+    - schema_analysis: Pure schema structure (pass to generate_semantic_descriptions)
+    - sample_data: Actual data samples (optional, use only if needed for additional context)
+    
     Args:
         schema_name: Name of the schema to analyze (optional)
-        include_ontology: Whether to generate ontology (default: True, recommended)
     
     Returns:
-        Dictionary containing complete analysis context with schema and ontology data
+        Dictionary with schema_analysis (structure) and sample_data (content) separated
     """
-    return schema_tools.get_analysis_context(schema_name, include_ontology)
+    return schema_tools.get_analysis_context(schema_name)
 
 
 @mcp.tool()
@@ -195,27 +202,64 @@ def sample_table_data(
 def generate_ontology(
     schema_name: Optional[str] = None,
     base_uri: Optional[str] = None,
-    enrich_llm: bool = False
-) -> str:
-    """Generate a database ontology with direct SQL generation support.
+    semantic_descriptions: Optional[str] = None
+) -> Dict[str, Any]:
+    """🎯 STEP 3: Generate a database ontology with semantic enrichment and SQL support.
     
-    ℹ️  Most users should use get_analysis_context() instead, which includes ontology automatically.
+    ⚠️ PREREQUISITES: Complete steps 1 and 2 FIRST:
+    1. ✅ get_analysis_context - Get schema structure
+    2. ✅ generate_semantic_descriptions - Create rich descriptions
+    3. ➡️ generate_ontology (current step) - Create enriched ontology
     
     This tool generates a comprehensive ontology containing:
     - Direct database table/column references (customers.customer_id)
     - Ready-to-use JOIN conditions (orders.customer_id = customers.customer_id)
-    - Business-friendly descriptions for understanding data meaning
+    - Business-friendly descriptions from semantic analysis
     - Complete metadata (data types, constraints, row counts)
+    
+    🤖 LLM WORKFLOW INSTRUCTIONS:
+    BEFORE calling this tool, you MUST have:
+    1. Called get_analysis_context to understand the schema
+    2. Called generate_semantic_descriptions to create rich descriptions
+    3. Pass the descriptions output as semantic_descriptions parameter
+    
+    IMPORTANT: Always pass the output from generate_semantic_descriptions
+    as the semantic_descriptions parameter to enrich the ontology.
+    
+    The semantic descriptions should include:
+    
+    1. For each table, business-oriented descriptions:
+       - What entities or concepts the table represents
+       - Its role in the business domain
+       - Key relationships with other tables
+    
+    2. For each column, descriptions covering:
+       - The business meaning of the data
+       - Valid values or ranges
+       - How it relates to business processes
+    
+    3. For relationships:
+       - The nature of the relationship (1:1, 1:many, many:many)
+       - Business rules or constraints
+       - How entities interact in the domain
     
     Args:
         schema_name: Name of the schema to generate ontology from (optional)
         base_uri: Base URI for the ontology (optional, uses config default)
-        enrich_llm: Whether to enrich the ontology with LLM insights (default: False)
+        semantic_descriptions: JSON string or dict from generate_semantic_descriptions tool (REQUIRED for enrichment)
     
     Returns:
-        RDF ontology in Turtle format with complete database mappings
+        Dictionary containing the RDF ontology and metadata:
+        {
+            "success": true,
+            "ontology": "RDF ontology in Turtle format",
+            "file_path": "path/to/saved/file.ttl",
+            "schema": "schema_name",
+            "table_count": 5,
+            "enriched": true/false
+        }
     """
-    return ontology_tools.generate_ontology(schema_name, base_uri, enrich_llm)
+    return ontology_tools.generate_ontology(schema_name, base_uri, semantic_descriptions)
 
 
 @mcp.tool()
@@ -618,6 +662,79 @@ def generate_chart(
 
 
 @mcp.tool()
+def generate_semantic_descriptions(
+    schema_info: Dict[str, Any]
+) -> Dict[str, Any]:
+    """📋 STEP 2: Generate rich semantic descriptions for database schema elements.
+    
+    ⚠️ PREREQUISITE: Run get_analysis_context FIRST to obtain schema_info
+    
+    This tool helps the LLM generate meaningful, business-oriented descriptions
+    for tables, columns, and relationships based on schema analysis and sample data.
+    
+    🤖 LLM WORKFLOW INSTRUCTIONS:
+    1. ✅ get_analysis_context - Get schema structure (must be completed)
+    2. ➡️ generate_semantic_descriptions (current step) - Create rich descriptions
+    3. ➡️ generate_ontology - Apply descriptions to create enriched ontology
+    
+    Use the schema_analysis from get_analysis_context as the schema_info parameter.
+    
+    🤖 LLM INSTRUCTIONS FOR GENERATING DESCRIPTIONS:
+    
+    You MUST return the analysis in this EXACT format:
+    
+    {
+        "tables": {
+            "table_name": {
+                "business_description": "What this table represents in business terms",
+                "table_type": "transactional|reference|audit|junction|dimension|fact", 
+                "key_patterns": ["pattern1", "pattern2"],
+                "usage_notes": "How this table is typically used"
+            }
+        },
+        "columns": {
+            "table_name.column_name": {
+                "business_description": "Business meaning of this column",
+                "data_characteristics": "Valid values, ranges, patterns", 
+                "business_rules": "Constraints and rules"
+            }
+        },
+        "relationships": {
+            "from_table.column -> to_table.column": {
+                "description": "What this relationship represents",
+                "cardinality": "1:1|1:many|many:many",
+                "business_rule": "Business constraint"
+            }
+        }
+    }
+    
+    Analyze the provided schema and generate descriptions that:
+    1. Explain business purpose and domain concepts
+    2. Identify common patterns (e.g., audit fields, lookup tables, fact/dimension tables)
+    3. Describe data quality rules and constraints
+    4. Explain relationships in business terms
+    5. Note any special handling or considerations
+    
+    Consider these patterns when analyzing:
+    - Tables ending in '_log', '_audit', '_history' → Audit/tracking tables
+    - Tables with 'dim_', 'fact_' prefixes → Data warehouse patterns
+    - Columns like 'created_at', 'updated_at' → Temporal tracking
+    - Columns ending in '_id' → Foreign keys or identifiers
+    - Tables with many foreign keys → Junction/association tables
+    - Tables with few columns and '_type', '_status' → Lookup/reference tables
+    
+    Args:
+        schema_info: Dictionary from get_analysis_context's schema_analysis
+    
+    Returns:
+        Dictionary with semantic descriptions - PASS THIS to generate_ontology's 
+        semantic_descriptions parameter for enriched output
+    """
+    from .tools import semantic
+    return semantic.generate_semantic_descriptions(schema_info)
+
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the Orionbelt Semantic Layer and its capabilities.
     
@@ -631,6 +748,6 @@ if __name__ == "__main__":
     # Minimal startup logging to reduce noise
     logger.info(f"Starting {SERVER_NAME} v{__version__}")
     logger.debug(f"Configuration: log_level={server_config.log_level}, base_uri={server_config.ontology_base_uri}")
-    logger.debug("MCP server ready with 11 tools for PostgreSQL, Snowflake, and Dremio")
+    logger.debug("MCP server ready with 12 tools for PostgreSQL, Snowflake, and Dremio")
     
     mcp.run()

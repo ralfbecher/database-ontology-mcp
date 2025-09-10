@@ -1,13 +1,10 @@
 """Schema analysis and data sampling tools."""
 
 import logging
-from datetime import datetime
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 
 from ..config import config_manager
-from ..database_manager import TableInfo, ColumnInfo
-from ..ontology_generator import OntologyGenerator
 from ..shared import get_db_manager, create_error_response
 from ..utils import sanitize_for_logging
 
@@ -54,8 +51,7 @@ def list_schemas() -> Dict[str, Any]:
 
 
 def get_analysis_context(
-    schema_name: Optional[str] = None,
-    include_ontology: bool = True
+    schema_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """Get analysis context implementation. Full documentation in main.py."""
     try:
@@ -79,12 +75,14 @@ def get_analysis_context(
             
             # Sequential table analysis 
             all_table_info = []
+            sample_data_dict = {}
             for table_name in tables:
                 try:
                     table_info = db_manager.analyze_table(table_name, schema_name)
                     if table_info:
                         # Convert dataclass to dict for JSON serialization
-                        table_dict = {
+                        # Separate schema structure from sample data
+                        schema_table = {
                             "name": table_info.name,
                             "schema": table_info.schema,
                             "columns": [
@@ -102,10 +100,13 @@ def get_analysis_context(
                             "primary_keys": table_info.primary_keys,
                             "foreign_keys": table_info.foreign_keys,
                             "comment": table_info.comment,
-                            "row_count": table_info.row_count,
-                            "sample_data": table_info.sample_data
+                            "row_count": table_info.row_count
                         }
-                        all_table_info.append(table_dict)
+                        all_table_info.append(schema_table)
+                        
+                        # Store sample data separately if available
+                        if table_info.sample_data:
+                            sample_data_dict[table_info.name] = table_info.sample_data
                 except Exception as e:
                     logger.warning(f"Failed to analyze table {table_name}: {e}")
             
@@ -133,88 +134,24 @@ def get_analysis_context(
             
         result = {
             "schema_analysis": schema_data,
+            "sample_data": sample_data_dict,
             "relationships": relationships,
-            "ontology": None,
             "sql_hints": {
                 "workflow": [
                     "1. Review the schema_analysis to understand table structure",
-                    "2. Use the ontology for business context and SQL references",
-                    "3. Check relationships for potential fan-traps before JOINs",
-                    "4. Validate SQL syntax before execution",
-                    "5. Execute queries with appropriate limits"
+                    "2. Check relationships for potential fan-traps before JOINs",
+                    "3. Use generate_semantic_descriptions(schema_analysis) for business context",
+                    "4. Use generate_ontology with semantic descriptions for enriched ontology",
+                    "5. Validate SQL syntax before execution",
+                    "6. Execute queries with appropriate limits"
+                ],
+                "data_separation": [
+                    "schema_analysis: Pure schema structure (for generate_semantic_descriptions)",
+                    "sample_data: Actual data samples (optional for additional context)",
+                    "Use schema_analysis for semantic analysis, sample_data only if needed"
                 ]
             }
         }
-        
-        # Generate ontology if requested (inline implementation)
-        if include_ontology:
-            try:
-                # Convert schema data to TableInfo objects for ontology generation
-                tables_info = []
-                for table_dict in all_table_info:
-                    columns = []
-                    for col_dict in table_dict['columns']:
-                        col_info = ColumnInfo(
-                            name=col_dict['name'],
-                            data_type=col_dict['data_type'],
-                            is_nullable=col_dict['is_nullable'],
-                            is_primary_key=col_dict['is_primary_key'],
-                            is_foreign_key=col_dict['is_foreign_key'],
-                            foreign_key_table=col_dict['foreign_key_table'],
-                            foreign_key_column=col_dict['foreign_key_column'],
-                            comment=col_dict['comment']
-                        )
-                        columns.append(col_info)
-                    
-                    table_info = TableInfo(
-                        name=table_dict['name'],
-                        schema=table_dict['schema'],
-                        columns=columns,
-                        primary_keys=table_dict['primary_keys'],
-                        foreign_keys=table_dict['foreign_keys'],
-                        comment=table_dict['comment'],
-                        row_count=table_dict['row_count'],
-                        sample_data=table_dict['sample_data']
-                    )
-                    tables_info.append(table_info)
-                
-                # Generate ontology
-                uri = server_config.ontology_base_uri
-                generator = OntologyGenerator(base_uri=uri)
-                ontology_ttl = generator.generate_from_schema(tables_info)
-                
-                if ontology_ttl:
-                    result["ontology"] = ontology_ttl
-                    
-                    # Save ontology to tmp folder for user editing
-                    try:
-                        from pathlib import Path
-                        TMP_DIR = Path(__file__).parent.parent.parent / "tmp"
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-                        ontology_filename = f"ontology_{schema_safe}_{timestamp}.ttl"
-                        ontology_file_path = TMP_DIR / ontology_filename
-                        
-                        with open(ontology_file_path, 'w', encoding='utf-8') as f:
-                            f.write(ontology_ttl)
-                        
-                        result["ontology_file_path"] = str(ontology_file_path)
-                        logger.info(f"Saved ontology to: {ontology_file_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to save ontology to file: {e}")
-                    
-                    result["sql_hints"]["ontology_benefits"] = [
-                        "Contains ready-to-use SQL column references (e.g., customers.customer_id)",
-                        "Includes complete JOIN conditions for relationships", 
-                        "Provides business descriptions for understanding data meaning",
-                        "Shows data types, constraints, and row counts",
-                        "Acts as both documentation and SQL generation reference",
-                        "Saved to tmp folder for manual editing if needed"
-                    ]
-                else:
-                    logger.warning("Failed to generate ontology for analysis context")
-            except Exception as e:
-                logger.warning(f"Could not generate ontology for analysis context: {e}")
         
         # Add relationship warnings for analysis
         fan_trap_warnings = []
@@ -231,8 +168,7 @@ def get_analysis_context(
         if fan_trap_warnings:
             result["sql_hints"]["fan_trap_warnings"] = fan_trap_warnings
             
-        logger.info(f"Generated analysis context: {len(schema_data.get('tables', []))} tables, "
-                   f"ontology: {result['ontology'] is not None}")
+        logger.info(f"Generated analysis context: {len(schema_data.get('tables', []))} tables")
                    
         return result
         
