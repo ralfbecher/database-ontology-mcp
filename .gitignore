@@ -14,4 +14,4 @@ wheels/
 tmp/
 
 # Test files in main directory
-test_*.py
+/test_*.py
