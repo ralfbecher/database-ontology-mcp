@@ -27,9 +27,19 @@ def connect_database(
 ) -> Dict[str, Any]:
     """Connect to database implementation. Full documentation in main.py."""
     import os
-    logger.info(f"🔍 MCP DEBUG - Connection requested - db_type: {db_type}, host: {host}, port: {port}, ssl: {ssl}")
-    logger.info(f"🔍 MCP DEBUG - Working directory: {os.getcwd()}")
-    logger.info(f"🔍 MCP DEBUG - Environment DREMIO vars: {len([k for k in os.environ.keys() if 'DREMIO' in k.upper()])}")
+    from dotenv import load_dotenv
+    
+    # Ensure .env is loaded - fallback mechanism with multiple search paths
+    possible_env_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env'),  # From src/tools/connection.py
+        os.path.join(os.getcwd(), '.env'),  # Current working directory
+        '/Users/ralfbecher/Documents/GitHub/mcp-servers/database-ontology-mcp/.env'  # Absolute path as fallback
+    ]
+    
+    for env_path in possible_env_paths:
+        if os.path.exists(env_path):
+            load_dotenv(env_path, override=False)
+            break
     try:
         db_manager = get_db_manager()
         db_config = config_manager.get_database_config()
@@ -41,6 +51,7 @@ def connect_database(
             final_database = database or db_config.postgres_database
             final_username = username or db_config.postgres_username
             final_password = password or db_config.postgres_password
+            
             
             if not all([final_host, final_port, final_database, final_username]):
                 return create_error_response(

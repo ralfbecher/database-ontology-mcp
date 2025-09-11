@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
     # Core MCP Framework - latest version
-    "fastmcp>=2.11.0",
+    "fastmcp>=2.12.0",
     
     # Database connectivity - latest versions
     "sqlalchemy>=2.0.25",

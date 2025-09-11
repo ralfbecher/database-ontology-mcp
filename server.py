@@ -2,8 +2,8 @@
 """Startup script for the Orionbelt Semantic Layer."""
 
 import sys
-import os
 import signal
+import shutil
 from pathlib import Path
 
 # Add src directory to path for imports
@@ -64,11 +64,38 @@ def print_startup_info():
     logger.info(f"  • Base URI: {config.ontology_base_uri}")
     logger.info("")
 
+def cleanup_tmp_folder():
+    """Clean up temporary files from previous server runs."""
+    tmp_dir = Path(__file__).parent / "tmp"
+    if tmp_dir.exists():
+        try:
+            # Remove all files in tmp directory but keep the directory
+            for file_path in tmp_dir.glob("*"):
+                if file_path.is_file():
+                    file_path.unlink()
+                    logger.debug(f"Removed temporary file: {file_path.name}")
+            
+            file_count = len(list(tmp_dir.glob("*")))
+            if file_count == 0:
+                logger.info("🧹 Cleaned up temporary files from previous runs")
+            else:
+                logger.info(f"🧹 Cleaned up temporary files, {file_count} items remain")
+                
+        except Exception as e:
+            logger.warning(f"Failed to clean tmp directory: {e}")
+    else:
+        # Create tmp directory if it doesn't exist
+        tmp_dir.mkdir(exist_ok=True)
+        logger.info("📁 Created tmp directory for ontology files")
+
 def main():
     """Start the Orionbelt Semantic Layer MCP server."""    
     try:
         # Setup signal handlers for graceful shutdown
         setup_signal_handlers()
+        
+        # Clean up temporary files from previous runs
+        cleanup_tmp_folder()
         
         # Print startup information
         print_startup_info()

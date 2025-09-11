@@ -144,29 +144,39 @@ class SQLInjectionValidator:
     DANGEROUS_PATTERNS = [
         # Multiple statements with DDL/DML
         r';.*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)',
-        r'UNION.*SELECT.*FROM',  # Union-based injection
+        # Classic injection patterns (but NOT blocking UNION/UNION ALL)
         r'OR\s+1\s*=\s*1',  # Always true conditions
         r'AND\s+1\s*=\s*1',  # Always true conditions
-        r'--.*$',  # SQL comments (could hide malicious code)
-        r'/\*.*\*/',  # Block comments
-        r';\s*$',  # Trailing semicolons (except single trailing)
+        r"OR\s+'[^']*'\s*=\s*'[^']*'",  # String-based always true
+        # Multiple semicolons or semicolon with dangerous operations
+        r';\s*;',  # Multiple semicolons
+        r';\s*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)',  # Semicolon followed by DDL/DML
         # SQL Server command execution
         r'xp_cmdshell|sp_executesql|exec\s*\(',
         # MySQL file operations
         r'load_file|into\s+outfile|into\s+dumpfile',
         # PostgreSQL file operations
         r'pg_read_file|copy.*from|copy.*to',
+        # System tables that shouldn't be accessed directly in normal queries
+        r'information_schema\.(?:user_privileges|schema_privileges|table_privileges)',
+        r'pg_catalog\.pg_authid|pg_catalog\.pg_user_mapping',
     ]
 
     # Safe SQL patterns that are allowed
     SAFE_PATTERNS = [
+        # Basic SELECT queries
         (r'^SELECT\s+.*FROM\s+[\w\."]+(?:\s+WHERE\s+.*)?'
          r'(?:\s+ORDER\s+BY\s+.*)?(?:\s+LIMIT\s+\d+)?$'),
-        r'^WITH\s+.*\s+SELECT\s+.*$',
+        # CTEs (WITH clauses) - now more permissive for complex queries
+        r'^WITH\s+[\s\S]+\s+SELECT\s+[\s\S]+$',  # Allow any CTE with SELECT
+        # Metadata queries
         r'^DESCRIBE\s+[\w\."]+$',
+        r'^DESC\s+[\w\."]+$',
         (r'^SHOW\s+(?:TABLES|COLUMNS|DATABASES|SCHEMAS)'
          r'(?:\s+FROM\s+[\w\."]+)?$'),
         r'^EXPLAIN\s+.*$',
+        # UNION queries (both UNION and UNION ALL)
+        r'.*\s+UNION\s+(?:ALL\s+)?SELECT\s+.*',
     ]
 
     def __init__(self) -> None:

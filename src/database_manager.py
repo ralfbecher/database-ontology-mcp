@@ -75,6 +75,7 @@ class DatabaseManager:
         self._connection_pool_size = 5
         self._max_overflow = 10
         self._dremio_rest_connection: Optional[Dict[str, Any]] = None
+        self._last_connection_params: Optional[Dict[str, Any]] = None  # Initialize this attribute
         
         # Security and performance improvements
         # SecureCredentialManager will automatically get MCP_MASTER_PASSWORD from .env
@@ -327,6 +328,16 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
+            
+            # Store connection parameters for reconnection
+            self._last_connection_params = {
+                "type": "postgresql",
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "password": password
+            }
             
             logger.info(f"Connected to PostgreSQL database: {database} at {host}:{port}")
             return True
