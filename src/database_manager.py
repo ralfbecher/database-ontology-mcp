@@ -490,7 +490,7 @@ class DatabaseManager:
                 # Create a new thread to run the async code
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(asyncio.run, test_dremio_connection())
-                    connection_result = future.result(timeout=30)
+                    connection_result = future.result(timeout=CONNECTION_TIMEOUT)
                 logger.debug(f"Async connection test completed via thread: {connection_result}")
                 
             except RuntimeError:
@@ -707,7 +707,7 @@ class DatabaseManager:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(asyncio.run, fetch_schemas())
-                return future.result(timeout=30)
+                return future.result(timeout=CONNECTION_TIMEOUT)
         except RuntimeError:
             # No event loop, create one
             return asyncio.run(fetch_schemas())
@@ -816,7 +816,7 @@ class DatabaseManager:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(asyncio.run, fetch_tables())
-                return future.result(timeout=30)
+                return future.result(timeout=CONNECTION_TIMEOUT)
         except RuntimeError:
             return asyncio.run(fetch_tables())
     
@@ -899,7 +899,7 @@ class DatabaseManager:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(asyncio.run, fetch_table_info())
-                return future.result(timeout=30)
+                return future.result(timeout=CONNECTION_TIMEOUT)
         except RuntimeError:
             return asyncio.run(fetch_table_info())
     
@@ -1220,7 +1220,7 @@ class DatabaseManager:
             for future in as_completed(future_to_table):
                 table_name = future_to_table[future]
                 try:
-                    table_info = future.result(timeout=30)  # 30 second timeout per table
+                    table_info = future.result(timeout=QUERY_TIMEOUT)  # Use query timeout for table analysis
                     if table_info:
                         results.append(table_info)
                         logger.debug(f"Completed analysis of table: {table_name}")
@@ -1680,7 +1680,7 @@ class DatabaseManager:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(asyncio.run, run_dremio_query())
-                    query_result = future.result(timeout=60)  # Longer timeout for queries
+                    query_result = future.result(timeout=QUERY_TIMEOUT)  # Use configured query timeout
             except RuntimeError:
                 # No event loop, create one
                 query_result = asyncio.run(run_dremio_query())
@@ -1774,7 +1774,7 @@ class DatabaseManager:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(asyncio.run, fetch_sample())
-                return future.result(timeout=30)
+                return future.result(timeout=CONNECTION_TIMEOUT)
         except RuntimeError:
             # No event loop, create one
             return asyncio.run(fetch_sample())
@@ -1822,7 +1822,7 @@ class DatabaseManager:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(asyncio.run, validate_query())
-                    explain_result = future.result(timeout=30)
+                    explain_result = future.result(timeout=QUERY_TIMEOUT)
             except RuntimeError:
                 # No event loop, create one
                 explain_result = asyncio.run(validate_query())

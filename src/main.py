@@ -245,13 +245,56 @@ def list_schemas() -> List[str]:
 
 @mcp.tool()
 def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
-    """Analyze a database schema and return detailed table information.
+    """Analyze a database schema and return comprehensive table information including relationships.
+    
+    This tool provides complete schema analysis including:
+    - Table structure (columns, data types, nullability)
+    - Primary key constraints
+    - Foreign key relationships (critical for preventing fan-traps)
+    - Table comments and metadata
+    - Row counts for each table
+    
+    RELATIONSHIP ANALYSIS:
+    The foreign_keys field for each table contains all relationships, which is CRITICAL for:
+    - Identifying 1:many relationships that can cause fan-traps
+    - Understanding table dependencies for proper JOIN ordering
+    - Detecting potential Cartesian product multiplications
+    - Planning UNION ALL strategies for multiple fact tables
     
     Args:
         schema_name: Name of the schema to analyze (optional)
     
     Returns:
-        Dictionary containing tables and their detailed information or error response
+        Dictionary containing:
+        - schema: Schema name
+        - table_count: Number of tables
+        - tables: List of table dictionaries, each containing:
+            - name: Table name
+            - schema: Schema name
+            - columns: List of column details (name, type, nullable, FK info)
+            - primary_keys: List of primary key column names
+            - foreign_keys: List of FK relationships (CRITICAL for fan-trap prevention)
+                Each FK contains: column, referenced_table, referenced_column
+            - comment: Table description
+            - row_count: Number of rows in table
+        - next_steps: Recommended workflow guidance
+        - analytical_guidance: Instructions for next step
+    
+    RECOMMENDED WORKFLOW:
+    After analyzing schema, run generate_ontology() next for optimal SQL generation.
+    
+    Standard analytical workflow:
+    1. analyze_schema() - Get schema structure and relationships
+    2. generate_ontology() - Create ontology with database schema linking  
+    3. execute_sql_query() - Generate SQL with ontology context
+    
+    The ontology provides:
+    - Database schema linking (db: namespace annotations)
+    - SQL column references (table.column format)
+    - JOIN conditions for safe relationship traversal
+    - Metadata for preventing fan-trap issues
+    
+    Ontology context improves SQL accuracy and helps prevent data corruption.
     """
     db_manager = _server_state.get_db_manager()
     tables = db_manager.get_tables(schema_name)
@@ -283,11 +326,34 @@ def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
             }
             all_table_info.append(table_dict)
     
-    return {
+    schema_result = {
         "schema": schema_name or "default",
         "table_count": len(all_table_info),
         "tables": all_table_info
     }
+    
+    # Add analytical workflow guidance
+    if all_table_info:
+        schema_result["next_steps"] = {
+            "recommended": "generate_ontology",
+            "reason": "Generate ontology with database schema linking for accurate SQL generation and fan-trap prevention",
+            "workflow": [
+                "1. ✅ analyze_schema (completed)",
+                "2. ➡️  generate_ontology (recommended next)",
+                "3. ➡️  execute_sql_query (with ontology context)"
+            ]
+        }
+        schema_result["analytical_guidance"] = (
+            "Recommended next step: Run generate_ontology()\n\n"
+            "This will create an ontology with:\n"
+            "• Database schema linking (db: namespace)\n"
+            "• SQL column references for queries\n" 
+            "• JOIN conditions for relationships\n"
+            "• Metadata for fan-trap prevention\n\n"
+            "The ontology provides context for accurate SQL generation."
+        )
+    
+    return schema_result
 
 
 @mcp.tool()
@@ -452,20 +518,6 @@ def sample_table_data(
     return sample_data
 
 
-@mcp.tool()
-def get_table_relationships(schema_name: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
-    """Get foreign key relationships between tables in a schema.
-    
-    Args:
-        schema_name: Name of the schema to analyze relationships (optional)
-    
-    Returns:
-        Dictionary mapping table names to their foreign key relationships or error response
-    """
-    db_manager = _server_state.get_db_manager()
-    relationships = db_manager.get_table_relationships(schema_name)
-    return relationships
-
 
 @mcp.tool()
 def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
@@ -609,39 +661,38 @@ def execute_sql_query(
 ) -> Dict[str, Any]:
     """Execute a validated SQL query against the connected database with comprehensive safety features.
     
-    ## 🚨 CRITICAL SQL TRAP PREVENTION PROTOCOL 🚨
+    ## SQL TRAP PREVENTION
 
-    ### MANDATORY PRE-EXECUTION CHECKLIST
+    ### PRE-EXECUTION CHECKLIST
 
-    **1. 🔍 RELATIONSHIP ANALYSIS (REQUIRED)**
-    - ALWAYS call `get_table_relationships()` first
-    - Identify ALL 1:many relationships in your query
-    - Flag any table appearing on "many" side of multiple relationships
+    **1. RELATIONSHIP ANALYSIS**
+    - Examine foreign_keys from `analyze_schema()` first
+    - Identify 1:many relationships in your query
+    - Note tables appearing on "many" side of multiple relationships
 
-    **2. 🎯 FAN-TRAP DETECTION (CRITICAL)**
+    **2. FAN-TRAP DETECTION**
 
-    **IMMEDIATE RED FLAGS:**
-    - ❌ Sales + Shipments + SUM() = GUARANTEED FAN-TRAP
-    - ❌ Any fact table + dimension + aggregation = HIGH RISK
-    - ❌ Multiple LEFT JOINs + GROUP BY = DANGER ZONE
-    - ❌ Joining 3+ tables with SUM/COUNT/AVG = LIKELY INFLATED RESULTS
+    **Common problematic patterns:**
+    - Sales + Shipments + SUM() = potential fan-trap
+    - Multiple fact tables with aggregation = high risk
+    - Multiple LEFT JOINs + GROUP BY = review carefully
+    - 3+ table joins with SUM/COUNT/AVG = check for inflation
 
-    **PATTERN CHECK:**
+    **Pattern to avoid:**
     ```
-    If query has: FROM tableA JOIN tableB JOIN tableC 
+    FROM tableA JOIN tableB JOIN tableC 
     WHERE tableA→tableB (1:many) AND tableA→tableC (1:many)
-    Then: GUARANTEED CARTESIAN PRODUCT MULTIPLICATION
-    Result: SUM(tableA.amount) will be artificially inflated!
+    Result: SUM(tableA.amount) may be artificially inflated
     ```
 
-    **3. 🛡️ MANDATORY VALIDATION**
-    - Call `validate_sql_syntax()` before execution
+    **3. VALIDATION**
+    - Use `validate_sql_syntax()` before execution
     - Review warnings about query complexity
     - Check for multiple table joins with aggregation
 
-    ## ✅ SAFE QUERY PATTERNS
+    ## SAFE QUERY PATTERNS
 
-    ### 🔒 PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
+    ### PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
 
     **Best for:** Multiple fact tables (sales, shipments, returns, etc.)
 
@@ -692,13 +743,13 @@ def execute_sql_query(
     ```
 
     **Advantages:**
-    - ✅ Natural fan-trap immunity by design
-    - ✅ Unified data model for consistent aggregation
-    - ✅ Easy to extend with additional fact types
-    - ✅ Single aggregation logic for all measures
-    - ✅ Better performance with fewer table scans
+    - Natural fan-trap immunity by design
+    - Unified data model for consistent aggregation
+    - Easy to extend with additional fact types
+    - Single aggregation logic for all measures
+    - Better performance with fewer table scans
 
-    ### 🔒 PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
+    ### PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
 
     **Use when:** UNION approach is not suitable
 
@@ -719,7 +770,7 @@ def execute_sql_query(
     LEFT JOIN fact2_totals f2 ON f1.key = f2.key;
     ```
 
-    ### 🔒 PATTERN 3 - DISTINCT AGGREGATION (USE CAREFULLY)
+    ### PATTERN 3 - DISTINCT AGGREGATION (USE CAREFULLY)
 
     **Warning:** Only use when you fully understand the data relationships
 
@@ -733,7 +784,7 @@ def execute_sql_query(
     GROUP BY key;
     ```
 
-    ### 🔒 PATTERN 4 - WINDOW FUNCTIONS
+    ### PATTERN 4 - WINDOW FUNCTIONS
 
     **For:** Complex analytical queries with preserved granularity
 
@@ -749,66 +800,61 @@ def execute_sql_query(
     ) f2 USING(key);
     ```
 
-    ## 🔄 RESULT VALIDATION (POST-EXECUTION)
+    ## RESULT VALIDATION
 
-    **Always verify results make business sense:**
+    **Verify results make business sense:**
     - Compare totals with business expectations
-    - Verify: `SELECT SUM(amount) FROM base_table` vs your query result
-    - Check row counts are reasonable
-    - If results seem too high → likely fan-trap occurred
+    - Cross-check: `SELECT SUM(amount) FROM base_table` vs your query result
+    - Ensure row counts are reasonable
+    - High results may indicate fan-trap multiplication
 
-    ## 📝 COMMON DEADLY COMBINATIONS TO AVOID
+    ## COMMON PROBLEMATIC COMBINATIONS
 
-    ❌ **Never do these without proper fan-trap prevention:**
+    **Patterns requiring careful review:**
     - `sales LEFT JOIN shipments + SUM(sales.amount)`
     - `orders LEFT JOIN order_items LEFT JOIN products + SUM(orders.total)`
     - `customers LEFT JOIN transactions LEFT JOIN transaction_items + aggregation`
-    - Any query joining parent→child1 + parent→child2 with SUM/COUNT
+    - Queries joining parent→child1 + parent→child2 with SUM/COUNT
 
-    ## 🎯 RELATIONSHIP ANALYSIS EXAMPLES
+    ## RELATIONSHIP EXAMPLES
 
-    **SAFE (1:1 relationships):**
+    **Safe (1:1 relationships):**
     ```
-    customers → customer_profiles (1:1) ✅
-    ```
-
-    **RISKY (1:many):**
-    ```
-    customers → orders (1:many) ⚠️
+    customers → customer_profiles (1:1)
     ```
 
-    **DEADLY (fan-trap):**
+    **Requires care (1:many):**
     ```
-    orders → order_items (1:many) + orders → shipments (1:many) 🚨
+    customers → orders (1:many)
     ```
 
-    **IF YOUR QUERY INCLUDES THE DEADLY PATTERN:**
-    → STOP! Rewrite using UNION approach or separate aggregation CTEs
+    **High risk (fan-trap potential):**
+    ```
+    orders → order_items (1:many) + orders → shipments (1:many)
+    ```
 
-    ## 🔧 EMERGENCY FAN-TRAP FIX
+    **For high-risk patterns:** Use UNION approach or separate aggregation CTEs
+
+    ## FAN-TRAP SOLUTIONS
 
     If you suspect fan-trap in existing query:
-    1. **Split into UNION approach** (recommended)
-    2. **Use separate aggregations**
-    3. **Add DISTINCT in SUM()** as temporary fix
-    4. **Validate results** against source tables
-    5. **Always aggregate fact tables separately** before joining
+    1. Split into UNION approach (recommended)
+    2. Use separate aggregations  
+    3. Add DISTINCT in SUM() as temporary fix
+    4. Validate results against source tables
+    5. Aggregate fact tables separately before joining
 
-    **Remember:** Fan-traps cause SILENT DATA CORRUPTION! Your query will execute successfully but return WRONG RESULTS. The bigger the multiplication factor, the more wrong your data becomes.
+    **Note:** Fan-traps cause silent data corruption - queries execute successfully but return inflated results.
 
-    ## ⚡ AUTOMATED CHECK
+    ## VALIDATION CHECKLIST
 
-    If your query involves more than 2 tables and includes SUM/COUNT/AVG, you MUST analyze for fan-traps before execution. No exceptions!
-
-    ## 🎯 SUCCESS CRITERIA
-
-    Only proceed with `execute_sql_query()` after ALL checks pass:
-    - [ ] Schema analyzed ✓
-    - [ ] Relationships analyzed ✓  
-    - [ ] Fan-trap patterns checked ✓
-    - [ ] Syntax validated ✓
-    - [ ] Safe aggregation pattern used ✓
-    - [ ] Results make business sense ✓
+    For queries with 2+ tables and aggregation:
+    - Schema analyzed
+    - Relationships reviewed
+    - Fan-trap patterns checked
+    - Syntax validated
+    - Safe aggregation pattern used
+    - Results validated
     
     This tool provides enterprise-grade SQL execution with multiple layers of protection:
     
@@ -960,6 +1006,132 @@ def execute_sql_query(
 
 
 @mcp.tool()
+def generate_chart(
+    data_source: List[Dict[str, Any]],
+    chart_type: str,
+    x_column: str,
+    y_column: Optional[str] = None,
+    color_column: Optional[str] = None,
+    title: Optional[str] = None,
+    chart_library: str = "matplotlib",
+    chart_style: str = "grouped",
+    width: int = 800,
+    height: int = 600
+) -> str:
+    """Generate interactive charts from SQL query results or data analysis.
+    
+    📊 VISUALIZATION CAPABILITIES:
+    This tool creates professional data visualizations directly in Claude Desktop,
+    supporting both static (Matplotlib) and interactive (Plotly) chart libraries.
+    
+    CHART TYPES:
+    • **bar**: Bar charts for categorical comparisons
+      - Grouped bars for multi-series data
+      - Stacked bars for part-to-whole relationships
+    • **line**: Line charts for trends over time
+      - Multi-series support with color coding
+      - Automatic time series detection
+    • **scatter**: Scatter plots for correlations
+      - Color coding by category
+      - Size variations for additional dimensions
+    • **heatmap**: Heat maps for matrix data
+      - Correlation matrices
+      - Pivot table visualizations
+    
+    LIBRARIES:
+    • **matplotlib** (default): Static PNG charts
+      - Better for simple visualizations
+      - Guaranteed compatibility
+      - Seaborn styling for aesthetics
+    • **plotly**: Interactive HTML/PNG charts
+      - Hover tooltips and zoom
+      - Better for complex data exploration
+      - Falls back to matplotlib if not available
+    
+    DATA PREPARATION:
+    The tool automatically handles:
+    - SQL query results from execute_sql_query
+    - JSON data structures
+    - Pandas DataFrame conversion
+    - Missing value handling
+    - Automatic type detection
+    
+    Args:
+        data_source: List of dictionaries containing the data to visualize.
+                    Typically the 'data' field from execute_sql_query results.
+        chart_type: Type of chart - 'bar', 'line', 'scatter', or 'heatmap'
+        x_column: Column name for X-axis (required)
+        y_column: Column name for Y-axis (optional for heatmaps)
+        color_column: Column for color grouping/legend (optional)
+        title: Chart title (auto-generated if not provided)
+        chart_library: 'matplotlib' or 'plotly' (default: matplotlib)
+        chart_style: 'grouped' or 'stacked' for bar charts (default: grouped)
+        width: Chart width in pixels (default: 800)
+        height: Chart height in pixels (default: 600)
+    
+    Returns:
+        Dictionary containing text description and chart file path (no base64 to avoid conversation limits)
+    
+    Example Usage:
+        # 1. Simple bar chart from query results
+        result = execute_sql_query("SELECT category, SUM(sales) as total FROM orders GROUP BY category")
+        generate_chart(result['data'], 'bar', 'category', 'total')
+        
+        # 2. Time series line chart
+        result = execute_sql_query("SELECT date, revenue FROM daily_sales ORDER BY date")
+        generate_chart(result['data'], 'line', 'date', 'revenue', title='Revenue Trend')
+        
+        # 3. Multi-series grouped bar chart
+        result = execute_sql_query(\"\"\"
+            SELECT region, product, SUM(quantity) as units 
+            FROM sales 
+            GROUP BY region, product
+        \"\"\")
+        generate_chart(result['data'], 'bar', 'region', 'units', 'product', chart_style='grouped')
+        
+        # 4. Correlation heatmap
+        result = execute_sql_query("SELECT * FROM metrics")
+        generate_chart(result['data'], 'heatmap', x_column='metric1')
+        
+        # 5. Scatter plot with categories
+        result = execute_sql_query("SELECT price, quality, brand FROM products")
+        generate_chart(result['data'], 'scatter', 'price', 'quality', 'brand')
+    
+    STYLING NOTES:
+    - Long labels are automatically rotated for readability
+    - Colors are chosen from professional palettes
+    - Legends appear when color_column is specified
+    - Grid lines and axes are optimized for clarity
+    
+    PERFORMANCE:
+    - Charts are rendered as PNG and saved to tmp/ directory
+    - NO base64 encoding to prevent conversation length limits
+    - Memory is properly managed (figures closed after rendering)
+    - Large datasets are automatically sampled if needed
+    
+    ERROR HANDLING:
+    - Missing libraries trigger helpful installation instructions
+    - Invalid column names show available columns
+    - Data type mismatches are automatically corrected
+    - Fallback from Plotly to Matplotlib if dependencies missing
+    """
+    # Import the implementation from tools module
+    from .tools.chart import generate_chart as chart_impl
+    
+    # Call the implementation and convert response format
+    result = chart_impl(
+        data_source, chart_type, x_column, y_column, color_column,
+        title, chart_library, chart_style, width, height
+    )
+    
+    # Convert MCP types to simple text response to avoid conversation limits
+    if result and len(result) > 0 and hasattr(result[0], 'text'):
+        return result[0].text
+    else:
+        return "Chart generation completed"
+
+
+@mcp.tool()
 def get_server_info() -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
     
@@ -975,7 +1147,8 @@ def get_server_info() -> Dict[str, Any]:
             "Database connection management",
             "Schema analysis",
             "Table relationship mapping",
-            "RDF/OWL ontology generation"
+            "RDF/OWL ontology generation",
+            "Interactive data visualization (charts)"
         ],
         "tools": [
             "connect_database",
@@ -983,9 +1156,9 @@ def get_server_info() -> Dict[str, Any]:
             "analyze_schema",
             "generate_ontology",
             "sample_table_data",
-            "get_table_relationships",
             "validate_sql_syntax",
             "execute_sql_query",
+            "generate_chart",
             "get_server_info"
         ]
     }

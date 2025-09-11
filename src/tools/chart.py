@@ -157,20 +157,22 @@ def generate_chart(
         # Log chart creation success
         logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
         
-        # Return the chart as PNG image for Claude Desktop
-        if image_data:
-            # Include file path info if image was saved
-            file_info = f" (PNG saved to: {image_file_path})" if image_file_path else ""
-            
+        # Return chart information without base64 to avoid conversation length limits
+        if image_file_path:
             return [
                 types.TextContent(
                     type="text", 
-                    text=f"Generated {chart_type} chart with {len(df)} data points using {chart_library}.{file_info}"
-                ),
-                types.ImageContent(
-                    type="image",
-                    data=image_data,
-                    mimeType="image/png"
+                    text=f"✅ Generated {chart_type} chart with {len(df)} data points using {chart_library}\n\n"
+                         f"📁 Chart saved to: {image_file_path}\n\n"
+                         f"📊 Chart Details:\n"
+                         f"   • Type: {chart_type.title()}\n"
+                         f"   • Title: {title}\n"
+                         f"   • X-axis: {x_column}\n"
+                         f"   • Y-axis: {y_column or 'N/A'}\n"
+                         f"   • Color by: {color_column or 'N/A'}\n"
+                         f"   • Library: {chart_library}\n"
+                         f"   • Dimensions: {width}x{height}px\n\n"
+                         f"💡 To view the chart, open the PNG file from the tmp folder."
                 )
             ]
         else:
