@@ -129,10 +129,11 @@ class SecureCredentialManager:
     ) -> Dict[str, Any]:
         """Remove sensitive information for logging."""
         sensitive_keys = {
-            'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'pat'
+            'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'pat', 'api_key'
         }
+        # Check if key contains any sensitive substrings
         return {
-            k: '***REDACTED***' if k.lower() in sensitive_keys and v else v
+            k: '***REDACTED***' if any(sens in k.lower() for sens in sensitive_keys) and v else v
             for k, v in credentials.items()
         }
 
@@ -148,6 +149,9 @@ class SQLInjectionValidator:
         r'OR\s+1\s*=\s*1',  # Always true conditions
         r'AND\s+1\s*=\s*1',  # Always true conditions
         r"OR\s+'[^']*'\s*=\s*'[^']*'",  # String-based always true
+        # SQL comment injection patterns
+        r"'[^']*'\s*--",  # String literal followed by SQL comment (injection pattern)
+        r'/\*.*\*/',  # Block comments (can be used to obfuscate or inject)
         # Multiple semicolons or semicolon with dangerous operations
         r';\s*;',  # Multiple semicolons
         r';\s*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)',  # Semicolon followed by DDL/DML
@@ -160,13 +164,14 @@ class SQLInjectionValidator:
         # System tables that shouldn't be accessed directly in normal queries
         r'information_schema\.(?:user_privileges|schema_privileges|table_privileges)',
         r'pg_catalog\.pg_authid|pg_catalog\.pg_user_mapping',
+        # Dangerous UNION queries attempting to extract sensitive data
+        r'UNION\s+(?:ALL\s+)?SELECT\s+.*(?:password|pwd|secret|token|key|admin)',
     ]
 
     # Safe SQL patterns that are allowed
     SAFE_PATTERNS = [
-        # Basic SELECT queries
-        (r'^SELECT\s+.*FROM\s+[\w\."]+(?:\s+WHERE\s+.*)?'
-         r'(?:\s+ORDER\s+BY\s+.*)?(?:\s+LIMIT\s+\d+)?$'),
+        # Basic SELECT queries with JOINs
+        (r'^SELECT\s+.+FROM\s+.+$'),  # More permissive - allows JOINs, WHERE, ORDER BY, LIMIT
         # CTEs (WITH clauses) - now more permissive for complex queries
         r'^WITH\s+[\s\S]+\s+SELECT\s+[\s\S]+$',  # Allow any CTE with SELECT
         # Metadata queries
@@ -175,8 +180,8 @@ class SQLInjectionValidator:
         (r'^SHOW\s+(?:TABLES|COLUMNS|DATABASES|SCHEMAS)'
          r'(?:\s+FROM\s+[\w\."]+)?$'),
         r'^EXPLAIN\s+.*$',
-        # UNION queries (both UNION and UNION ALL)
-        r'.*\s+UNION\s+(?:ALL\s+)?SELECT\s+.*',
+        # UNION queries (both UNION and UNION ALL) - Note: Will still be blocked if dangerous patterns match
+        r'.*\s+UNION\s+(?:ALL\s+)?SELECT\s+.+',
     ]
 
     def __init__(self) -> None:
@@ -267,12 +272,12 @@ class SQLInjectionValidator:
 class IdentifierValidator:
     """Validates database identifiers to prevent injection."""
 
-    # Valid identifier pattern (letters, numbers, underscores, hyphens)
-    VALID_IDENTIFIER = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_-]*$')
+    # Valid identifier pattern (letters, numbers, underscores only - no hyphens)
+    VALID_IDENTIFIER = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-    # Valid schema.table pattern
+    # Valid schema.table pattern (no hyphens)
     VALID_QUALIFIED_IDENTIFIER = re.compile(
-        r'^[a-zA-Z_][a-zA-Z0-9_-]*\.[a-zA-Z_][a-zA-Z0-9_-]*$'
+        r'^[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*$'
     )
 
     @classmethod
@@ -305,8 +310,8 @@ class IdentifierValidator:
         if not identifier:
             return ""
 
-        # Remove invalid characters
-        sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', identifier)
+        # Remove invalid characters (including hyphens)
+        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', identifier)
 
         # Ensure starts with letter or underscore
         if sanitized and not sanitized[0].isalpha() and sanitized[0] != '_':
@@ -350,18 +355,19 @@ def audit_log_security_event(
     # Sanitize details before logging
     safe_details = {}
     sensitive_keys = {
-        'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'pat'
+        'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'pat', 'api_key'
     }
 
     for key, value in details.items():
-        if key.lower() in sensitive_keys:
+        # Check if key contains any sensitive substring
+        if any(sens in key.lower() for sens in sensitive_keys):
             safe_details[key] = '***REDACTED***'
         else:
             safe_details[key] = value
 
+    # Use f-string formatting to actually substitute values
     logger.warning(
-        "SECURITY_AUDIT: %s | Risk: %s | Details: %s",
-        event_type, risk_level.value, safe_details
+        f"SECURITY_AUDIT: {event_type} | Risk: {risk_level.value} | Details: {safe_details}"
     )
 
 

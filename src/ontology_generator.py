@@ -183,12 +183,12 @@ class OntologyGenerator:
     def _map_sql_to_xsd(self, sql_type: str) -> Optional[URIRef]:
         """Map SQL data types to XSD Schema datatypes."""
         sql_type = sql_type.lower()
-        
-        # Integer types
-        if any(t in sql_type for t in ["int", "serial", "bigint", "smallint"]):
-            return XSD.integer
+
+        # Integer types - check tinyint first before checking for "int"
         if "tinyint" in sql_type:
             return XSD.byte
+        if any(t in sql_type for t in ["int", "serial", "bigint", "smallint"]):
+            return XSD.integer
         
         # String types
         if any(t in sql_type for t in ["char", "text", "varchar", "string"]):
@@ -324,6 +324,193 @@ class OntologyGenerator:
     def serialize_ontology(self) -> str:
         """Serialize the current ontology to Turtle format."""
         return self.graph.serialize(format="turtle")
+
+    def get_enrichment_data(self, tables_info: List[TableInfo], sample_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Generate enrichment data structure for LLM processing.
+
+        Args:
+            tables_info: List of table information
+            sample_data: Dictionary mapping table names to sample rows
+
+        Returns:
+            Dictionary with schema_data and instructions for LLM enrichment
+        """
+        schema_data = []
+
+        for table_info in tables_info:
+            table_data = {
+                "table_name": table_info.name,
+                "schema": table_info.schema,
+                "row_count": table_info.row_count,
+                "columns": []
+            }
+
+            # Add column information
+            for column in table_info.columns:
+                column_data = {
+                    "name": column.name,
+                    "data_type": column.data_type,
+                    "is_nullable": column.is_nullable,
+                    "is_primary_key": column.is_primary_key,
+                    "is_foreign_key": column.is_foreign_key
+                }
+                if column.comment:
+                    column_data["comment"] = column.comment
+                if column.is_foreign_key and column.foreign_key_table:
+                    column_data["foreign_key_table"] = column.foreign_key_table
+                    column_data["foreign_key_column"] = column.foreign_key_column
+                table_data["columns"].append(column_data)
+
+            # Add sample data if available (limit to 3 rows)
+            if table_info.name in sample_data and sample_data[table_info.name]:
+                table_data["sample_data"] = sample_data[table_info.name][:3]
+
+            schema_data.append(table_data)
+
+        # Generate instructions for LLM enrichment
+        instructions = {
+            "task": "Enrich the database schema with semantic descriptions",
+            "expected_format": {
+                "classes": [
+                    {
+                        "original_name": "table_name",
+                        "suggested_name": "SemanticName",
+                        "description": "Business description"
+                    }
+                ],
+                "properties": [
+                    {
+                        "table_name": "table_name",
+                        "original_name": "column_name",
+                        "suggested_name": "semanticPropertyName",
+                        "description": "Business meaning"
+                    }
+                ],
+                "relationships": [
+                    {
+                        "from_table": "source_table",
+                        "to_table": "target_table",
+                        "suggested_name": "semanticRelationshipName",
+                        "description": "Relationship meaning"
+                    }
+                ]
+            },
+            "guidelines": [
+                "Use clear, business-oriented terminology",
+                "Provide meaningful descriptions based on table and column names and sample data",
+                "Suggest appropriate semantic names that reflect business concepts",
+                "For relationships, describe the business meaning of the association"
+            ]
+        }
+
+        return {
+            "schema_data": schema_data,
+            "instructions": instructions
+        }
+
+    def apply_enrichment(self, enrichment_suggestions: Dict[str, List[Dict[str, Any]]]) -> None:
+        """Apply enrichment suggestions to the ontology.
+
+        Args:
+            enrichment_suggestions: Dictionary containing enrichment suggestions for:
+                - classes: Class-level enrichments (table names, descriptions)
+                - properties: Property-level enrichments (column names, descriptions)
+                - relationships: Relationship enrichments (foreign key descriptions)
+        """
+        logger.info("Applying enrichment suggestions to ontology")
+
+        # Apply class enrichments
+        if "classes" in enrichment_suggestions:
+            for class_enrichment in enrichment_suggestions["classes"]:
+                original_name = class_enrichment.get("original_name")
+                suggested_name = class_enrichment.get("suggested_name")
+                description = class_enrichment.get("description")
+
+                if not original_name:
+                    continue
+
+                # Find the original class URI
+                original_uri = self.base_uri[self._clean_name(original_name)]
+
+                # Add suggested name as label if provided
+                if suggested_name:
+                    # Remove old label if exists
+                    self.graph.remove((original_uri, RDFS.label, None))
+                    self.graph.add((original_uri, RDFS.label, Literal(suggested_name)))
+
+                # Add description as comment if provided
+                if description:
+                    # Remove old comment if exists
+                    self.graph.remove((original_uri, RDFS.comment, None))
+                    self.graph.add((original_uri, RDFS.comment, Literal(description)))
+
+        # Apply property enrichments
+        if "properties" in enrichment_suggestions:
+            for prop_enrichment in enrichment_suggestions["properties"]:
+                table_name = prop_enrichment.get("table_name")
+                original_name = prop_enrichment.get("original_name")
+                suggested_name = prop_enrichment.get("suggested_name")
+                description = prop_enrichment.get("description")
+
+                if not table_name or not original_name:
+                    continue
+
+                # Find the original property URI
+                prop_name = f"{self._clean_name(table_name)}_{self._clean_name(original_name)}"
+                prop_uri = self.base_uri[prop_name]
+
+                # Add suggested name as label if provided
+                if suggested_name:
+                    self.graph.remove((prop_uri, RDFS.label, None))
+                    self.graph.add((prop_uri, RDFS.label, Literal(suggested_name)))
+
+                # Add description as comment if provided
+                if description:
+                    self.graph.remove((prop_uri, RDFS.comment, None))
+                    self.graph.add((prop_uri, RDFS.comment, Literal(description)))
+
+        # Apply relationship enrichments
+        if "relationships" in enrichment_suggestions:
+            for rel_enrichment in enrichment_suggestions["relationships"]:
+                from_table = rel_enrichment.get("from_table")
+                to_table = rel_enrichment.get("to_table")
+                suggested_name = rel_enrichment.get("suggested_name")
+                description = rel_enrichment.get("description")
+
+                if not from_table or not to_table:
+                    continue
+
+                # Find the original relationship URI
+                rel_name = f"{self._clean_name(from_table)}_has_{self._clean_name(to_table)}"
+                rel_uri = self.base_uri[rel_name]
+
+                # Add suggested name as label if provided
+                if suggested_name:
+                    self.graph.remove((rel_uri, RDFS.label, None))
+                    self.graph.add((rel_uri, RDFS.label, Literal(suggested_name)))
+
+                # Add description as comment if provided
+                if description:
+                    self.graph.remove((rel_uri, RDFS.comment, None))
+                    self.graph.add((rel_uri, RDFS.comment, Literal(description)))
+
+        logger.info("Finished applying enrichment suggestions")
+
+    def enrich_with_llm(self, tables_info: List[TableInfo], sample_data: Dict[str, List[Dict[str, Any]]]) -> str:
+        """Generate basic ontology with optional LLM enrichment.
+
+        This is a placeholder method that generates a basic ontology.
+        LLM enrichment is handled by the MCP tools layer.
+
+        Args:
+            tables_info: List of table information
+            sample_data: Sample data for tables
+
+        Returns:
+            Serialized ontology in Turtle format
+        """
+        logger.info("Generating basic ontology (LLM enrichment handled by MCP tools)")
+        return self.generate_from_schema(tables_info)
 
 
 

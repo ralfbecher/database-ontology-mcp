@@ -1,17 +1,19 @@
 """Main MCP server application using FastMCP."""
 
-import asyncio
-import json
 import logging
 import os
+from pathlib import Path
+from datetime import datetime
 from typing import Optional, List, Dict, Any
-from contextlib import contextmanager
+
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from fastmcp import FastMCP
+
+from .database_manager import DatabaseManager, TableInfo, ColumnInfo
+from .ontology_generator import OntologyGenerator
 
 # Load environment variables from project root FIRST
-import sys
-
 # Try multiple possible paths for .env file
 possible_env_paths = [
     os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'),  # relative to src
@@ -25,10 +27,6 @@ for env_path in possible_env_paths:
         load_dotenv(env_path)
         env_loaded = True
         break
-
-from fastmcp import FastMCP
-from .database_manager import DatabaseManager, TableInfo
-from .ontology_generator import OntologyGenerator
 
 # Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -47,8 +45,282 @@ else:
 
 # --- MCP Server Setup ---
 
-# Create server instance
-mcp = FastMCP("Database Ontology MCP Server")
+# Create server instance with comprehensive instructions
+mcp = FastMCP(
+    "Database Ontology MCP Server",
+    instructions="""
+# Orionbelt Semantic Layer - Database Ontology MCP Server
+
+A sophisticated MCP server that provides **semantic database understanding** through ontology generation,
+enabling accurate Text-to-SQL with automatic fan-trap prevention and relationship-aware query construction.
+
+## 🎯 PURPOSE
+
+This server transforms raw database schemas into **semantic ontologies** that provide:
+- **Database schema linking** via RDF/OWL ontologies with db: namespace annotations
+- **Relationship-aware SQL generation** with automatic JOIN condition inference
+- **Fan-trap prevention** through relationship analysis and safe query patterns
+- **Secure query execution** with syntax validation and injection prevention
+- **Interactive data visualization** for analytical insights
+
+## 🔧 CORE CAPABILITIES
+
+### 1. Database Connectivity
+- **PostgreSQL** - Full support with connection pooling
+- **Snowflake** - Cloud data warehouse integration
+- **Dremio** - Distributed query engine support (REST API)
+
+### 2. Schema Intelligence
+- Comprehensive table/column analysis with metadata
+- Foreign key relationship mapping (critical for preventing data corruption)
+- Primary key constraint identification
+- Data type mapping and validation
+- Row count statistics per table
+
+### 3. Ontology Generation (Key Differentiator)
+- **RDF/OWL ontology** creation from database schemas
+- **db: namespace annotations** linking ontology classes to SQL tables/columns
+- **Relationship preservation** capturing 1:1, 1:many, and many:many patterns
+- **XSD type mapping** for proper data type handling
+- Output in Turtle (.ttl) format with human-readable structure
+
+### 4. Safe SQL Execution
+- **Fan-trap detection** and prevention guidance
+- **SQL injection protection** with pattern validation
+- **Query validation** before execution
+- **Controlled result limits** to prevent memory exhaustion
+- **Execution monitoring** with performance metrics
+
+### 5. Data Visualization
+- Interactive and static chart generation (Matplotlib, Plotly)
+- Bar charts, line plots, scatter plots, and heatmaps
+- Direct integration with SQL query results
+- Memory-efficient rendering without base64 encoding
+
+## 📋 RECOMMENDED WORKFLOWS
+
+### Workflow 1: Complete Schema Analysis → Ontology → SQL (RECOMMENDED)
+
+**Purpose:** Generate accurate SQL with semantic context and fan-trap prevention
+
+**Tool Chain:**
+```
+1. connect_database(db_type="postgresql")
+   → Establish secure database connection
+
+2. list_schemas()
+   → Discover available schemas in the database
+
+3. analyze_schema(schema_name="public")
+   → Get complete schema structure with relationships
+   → CRITICAL: Review foreign_keys for each table (fan-trap analysis)
+   → Output includes: tables, columns, PKs, FKs, row counts
+
+4. generate_ontology(schema_name="public")
+   → Create RDF ontology with db: namespace linking
+   → Ontology maps business concepts to SQL tables/columns
+   → Preserves relationships for accurate JOIN generation
+   → Saved to tmp/ directory for reference
+
+5. execute_sql_query(sql_query="...", limit=1000)
+   → Execute validated SQL with ontology context
+   → Automatic fan-trap prevention guidance
+   → Returns structured results with metadata
+```
+
+**Why This Order:**
+- Schema analysis **must come before ontology** to capture relationships
+- Ontology provides **semantic context** for accurate SQL generation
+- Foreign key analysis **prevents fan-trap data corruption**
+- Validation ensures **query safety** before execution
+
+### Workflow 2: Quick Data Exploration
+
+**Purpose:** Rapid data sampling and analysis without ontology
+
+**Tool Chain:**
+```
+1. connect_database(db_type="snowflake")
+2. list_schemas()
+3. sample_table_data(table_name="customers", limit=10)
+   → Quick data preview without full schema analysis
+4. execute_sql_query(sql_query="SELECT COUNT(*) FROM customers")
+```
+
+### Workflow 3: SQL Validation → Execution → Visualization
+
+**Purpose:** Validate, execute, and visualize analytical queries
+
+**Tool Chain:**
+```
+1. validate_sql_syntax(sql_query="SELECT category, SUM(sales) FROM orders GROUP BY category")
+   → Syntax checking, security validation, performance analysis
+   → Returns: is_valid, warnings, suggestions, security_analysis
+
+2. execute_sql_query(sql_query="...", limit=500)
+   → Execute if validation passes
+   → Returns: data, columns, row_count, execution_time_ms
+
+3. generate_chart(
+     data_source=result['data'],
+     chart_type='bar',
+     x_column='category',
+     y_column='sales'
+   )
+   → Create visualization from query results
+   → Saved to tmp/ directory
+```
+
+### Workflow 4: Relationship Analysis for Complex Queries
+
+**Purpose:** Prevent fan-traps when joining multiple fact tables
+
+**Tool Chain:**
+```
+1. analyze_schema(schema_name="analytics")
+   → EXAMINE foreign_keys field for EACH table
+   → Identify 1:many relationships
+
+2. ANALYZE for fan-traps:
+   - Look for tables on "many" side of multiple relationships
+   - Example: orders → order_items (1:many) + orders → shipments (1:many)
+   - This is a FAN-TRAP: joining both will inflate aggregations
+
+3. Use UNION ALL pattern (recommended):
+   WITH unified_facts AS (
+       SELECT ... FROM order_items
+       UNION ALL
+       SELECT ... FROM shipments
+   )
+   SELECT ... GROUP BY ...
+
+4. execute_sql_query(sql_query="...")
+   → Execute fan-trap-safe query
+```
+
+## ⚠️ CRITICAL: Fan-Trap Prevention
+
+**What is a Fan-Trap?**
+When a parent table has multiple 1:many relationships and you JOIN them with aggregation:
+```
+orders (1) → order_items (many)
+orders (1) → shipments (many)
+
+❌ WRONG: SELECT SUM(order_items.amount) FROM orders
+          JOIN order_items ... JOIN shipments ...
+          Result: Inflated totals due to Cartesian product
+
+✅ RIGHT: Use UNION ALL to combine facts, then aggregate
+```
+
+**Always:**
+1. Review `foreign_keys` from analyze_schema() FIRST
+2. Use validate_sql_syntax() before execution
+3. Use UNION ALL pattern for multi-fact queries
+4. Validate results against source tables
+
+## 🔐 SECURITY FEATURES
+
+- **SQL injection prevention** - Pattern-based validation and parameterized queries
+- **Query timeout protection** - Prevents runaway queries
+- **Result size limits** - Configurable row limits (max 10,000)
+- **Read-only enforcement** - No DML/DDL operations allowed
+- **Credential encryption** - Secure password handling
+- **Audit logging** - Security event tracking
+
+## 🎓 ONTOLOGY-ENHANCED SQL GENERATION
+
+**Key Advantage:** The generated ontology includes **db: namespace annotations** that map:
+- Ontology classes → SQL table names
+- Ontology properties → SQL column names
+- Ontology relationships → SQL JOIN conditions
+
+**Example Ontology Output:**
+```turtle
+:Customer a owl:Class ;
+    rdfs:label "Customer" ;
+    db:tableName "customers" ;          # Links to SQL table
+    db:primaryKey "customer_id" .
+
+:hasOrder a owl:ObjectProperty ;
+    rdfs:domain :Customer ;
+    rdfs:range :Order ;
+    db:joinCondition "customers.customer_id = orders.customer_id" .  # JOIN hint
+```
+
+**This enables:**
+- More accurate Text-to-SQL generation
+- Automatic JOIN path discovery
+- Relationship-aware query planning
+- Prevention of incorrect table combinations
+
+## 📊 SUPPORTED QUERY TYPES
+
+- **SELECT** - Data retrieval with JOINs, aggregations, window functions
+- **WITH (CTE)** - Common Table Expressions for complex queries
+- **UNION/UNION ALL** - Combining result sets (recommended for fan-trap prevention)
+- **Metadata queries** - DESCRIBE, SHOW, EXPLAIN
+- **Analytical functions** - GROUP BY, HAVING, ORDER BY, LIMIT
+- **Window functions** - OVER, PARTITION BY, ROW_NUMBER, RANK
+
+## 💡 BEST PRACTICES
+
+1. **Always start with schema analysis** - Understanding relationships prevents errors
+2. **Generate ontology for semantic context** - Improves SQL accuracy significantly
+3. **Validate before execution** - Catch errors early
+4. **Use UNION ALL for multi-fact aggregation** - Prevents fan-trap inflation
+5. **Check foreign_keys in schema output** - Critical for relationship understanding
+6. **Apply sensible LIMIT values** - Start small, increase as needed
+7. **Visualize results** - Charts reveal data patterns quickly
+
+## 🚀 GETTING STARTED
+
+**Minimal Example:**
+```
+1. connect_database(db_type="postgresql")
+2. analyze_schema(schema_name="public")
+3. generate_ontology(schema_name="public")
+4. execute_sql_query(sql_query="SELECT * FROM customers LIMIT 10")
+```
+
+**Full Analytical Workflow:**
+```
+1. connect_database(db_type="snowflake")
+2. list_schemas()
+3. analyze_schema(schema_name="analytics")
+4. generate_ontology(schema_name="analytics")
+5. validate_sql_syntax(sql_query="...")
+6. execute_sql_query(sql_query="...", limit=1000)
+7. generate_chart(data_source=result['data'], chart_type='bar', ...)
+```
+
+## 📝 OUTPUT LOCATIONS
+
+- **Ontologies**: Saved to `tmp/ontology_{schema}_{timestamp}.ttl`
+- **Charts**: Saved to `tmp/chart_{timestamp}.png`
+- **Logs**: Console output with INFO/WARNING/ERROR levels
+
+## 🔗 TOOL CHAINING EXAMPLES
+
+**Example 1 - Complete Analysis Pipeline:**
+analyze_schema → generate_ontology → validate_sql_syntax → execute_sql_query → generate_chart
+
+**Example 2 - Quick Exploration:**
+connect_database → list_schemas → sample_table_data
+
+**Example 3 - Query Optimization:**
+analyze_schema → validate_sql_syntax (review warnings) → execute_sql_query
+
+**Example 4 - Fan-Trap Safe Aggregation:**
+analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_sql_query
+
+---
+
+**Server Version**: 0.3.0
+**Supported Databases**: PostgreSQL, Snowflake, Dremio
+**Primary Use Case**: Semantic database analysis with ontology-enhanced Text-to-SQL generation
+"""
+)
 
 # --- Dependency Management ---
 
@@ -384,9 +656,8 @@ def generate_ontology(
         try:
             import json
             schema_data = json.loads(schema_info) if isinstance(schema_info, str) else schema_info
-            
-            # Convert schema data to TableInfo objects
-            from .database_manager import TableInfo, ColumnInfo
+
+            # Convert schema data to TableInfo objects (already imported at module level)
             
             if "tables" in schema_data:
                 for table_data in schema_data["tables"]:
@@ -464,12 +735,9 @@ def generate_ontology(
     # Save ontology to tmp folder for user access
     ontology_file_path = None
     try:
-        from pathlib import Path
-        from datetime import datetime
-        
         TMP_DIR = Path(__file__).parent.parent / "tmp"
         TMP_DIR.mkdir(exist_ok=True)  # Ensure tmp directory exists
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
         ontology_filename = f"ontology_{schema_safe}_{timestamp}.ttl"

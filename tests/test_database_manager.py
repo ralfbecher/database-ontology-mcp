@@ -130,7 +130,7 @@ class TestDatabaseManager(unittest.TestCase):
         self.db_manager.engine = Mock()
         mock_inspector = Mock()
         mock_inspect.return_value = mock_inspector
-        
+
         mock_inspector.has_table.return_value = True
         mock_inspector.get_columns.return_value = [
             {
@@ -150,17 +150,35 @@ class TestDatabaseManager(unittest.TestCase):
             'constrained_columns': ['id']
         }
         mock_inspector.get_foreign_keys.return_value = []
-        
-        # Mock connection for row count
+
+        # Mock connection for row count and sample data
         mock_conn = Mock()
-        mock_result = Mock()
-        mock_result.scalar.return_value = 100
-        mock_conn.execute.return_value = mock_result
+
+        # Mock the row count query result - scalar() must return actual int, not Mock
+        mock_count_result = Mock()
+        mock_count_result.scalar = MagicMock(return_value=100)
+
+        # Mock the sample data query result
+        mock_sample_result = Mock()
+        mock_sample_result.keys = Mock(return_value=['id', 'name'])
+        mock_sample_result.fetchall = Mock(return_value=[
+            (1, 'Test User 1'),
+            (2, 'Test User 2')
+        ])
+
+        # Mock execute to return different results for different queries
+        mock_conn.execute = Mock(side_effect=[mock_count_result, mock_sample_result])
+
         self.db_manager.engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
         self.db_manager.engine.connect.return_value.__exit__ = Mock(return_value=None)
-        
-        result = self.db_manager.analyze_table("test_table", "public")
-        
+
+        # Set connection_info to determine database type for sample query
+        self.db_manager.connection_info = {"type": "postgresql"}
+
+        # Mock _test_connection to return True so _ensure_connection doesn't fail
+        with patch.object(self.db_manager, '_test_connection', return_value=True):
+            result = self.db_manager.analyze_table("test_table", "public")
+
         self.assertIsInstance(result, TableInfo)
         self.assertEqual(result.name, "test_table")
         self.assertEqual(result.schema, "public")
@@ -179,11 +197,20 @@ class TestDatabaseManager(unittest.TestCase):
         self.db_manager.engine = Mock()
         mock_inspector = Mock()
         mock_inspect.return_value = mock_inspector
-        
+
         mock_inspector.has_table.return_value = False
-        
-        result = self.db_manager.analyze_table("nonexistent_table")
-        
+
+        # Mock connection for _test_connection
+        mock_conn = Mock()
+        mock_result = Mock()
+        mock_conn.execute.return_value = mock_result
+        self.db_manager.engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
+        self.db_manager.engine.connect.return_value.__exit__ = Mock(return_value=None)
+
+        # Mock _test_connection to return True so _ensure_connection doesn't fail
+        with patch.object(self.db_manager, '_test_connection', return_value=True):
+            result = self.db_manager.analyze_table("nonexistent_table")
+
         self.assertIsNone(result)
     
     def test_sample_table_data_no_engine(self):
@@ -208,6 +235,9 @@ class TestDatabaseManager(unittest.TestCase):
     def test_sample_table_data_limit_validation(self):
         """Test data sampling with various limit values."""
         self.db_manager.engine = Mock()
+        self.db_manager.connection_info = {"type": "postgresql"}  # Set connection type
+
+        # Test with negative limit - should use default
         mock_conn = Mock()
         mock_result = Mock()
         mock_result.keys.return_value = ['id', 'name']
@@ -215,17 +245,25 @@ class TestDatabaseManager(unittest.TestCase):
         mock_conn.execute.return_value = mock_result
         self.db_manager.engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
         self.db_manager.engine.connect.return_value.__exit__ = Mock(return_value=None)
-        
-        # Test with negative limit
+
         result = self.db_manager.sample_table_data("test_table", limit=-1)
         self.assertEqual(result, [])
-        
-        # Test with very large limit
+
+        # Test with very large limit - should be capped at MAX_SAMPLE_LIMIT (1000)
+        # Reset the mock for the second call
+        mock_conn.reset_mock()
+        mock_result2 = Mock()
+        mock_result2.keys.return_value = ['id', 'name']
+        mock_result2.fetchall.return_value = []
+        mock_conn.execute.return_value = mock_result2
+
         result = self.db_manager.sample_table_data("test_table", limit=2000)
         # Should be capped at MAX_SAMPLE_LIMIT (1000)
         mock_conn.execute.assert_called()
-        args = mock_conn.execute.call_args
-        self.assertEqual(args[1]['limit'], 1000)
+        # Check the SQL query contains LIMIT 1000
+        call_args = mock_conn.execute.call_args
+        # The first argument should be the text() object, second is params dict
+        self.assertEqual(call_args[1]['limit'], 1000)
     
     def test_disconnect(self):
         """Test database disconnection."""

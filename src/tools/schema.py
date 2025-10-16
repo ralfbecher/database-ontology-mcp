@@ -1,53 +1,39 @@
 """Schema analysis and data sampling tools."""
 
 import logging
-from typing import Dict, List, Optional, Any
-from contextlib import contextmanager
+from typing import Dict, Optional, Any
 
-from ..config import config_manager
 from ..shared import get_db_manager, create_error_response
-from ..utils import sanitize_for_logging
 
 logger = logging.getLogger(__name__)
 
 
-@contextmanager
-def error_handler(operation_name: str):
-    """Context manager for consistent error handling."""
-    try:
-        yield
-    except Exception as e:
-        logger.error(f"Error in {operation_name}: {type(e).__name__}: {e}")
-        raise
-
-
 def list_schemas() -> Dict[str, Any]:
     """List database schemas. Full documentation in main.py."""
-    with error_handler("list_schemas") as handler:
-        db_manager = get_db_manager()
-        
-        if not db_manager.has_engine():
-            return create_error_response(
-                "No database connection established",
-                "connection_error", 
-                "Use connect_database tool first"
-            )
-        
-        try:
-            schemas = db_manager.get_schemas()
-            logger.debug(f"Retrieved {len(schemas)} schemas")
-            return {
-                "success": True,
-                "schemas": schemas,
-                "count": len(schemas)
-            }
-        except Exception as e:
-            logger.error(f"Failed to list schemas: {e}")
-            return create_error_response(
-                "Failed to retrieve schema list",
-                "database_error",
-                str(e)
-            )
+    db_manager = get_db_manager()
+
+    if not db_manager.has_engine():
+        return create_error_response(
+            "No database connection established",
+            "connection_error",
+            "Use connect_database tool first"
+        )
+
+    try:
+        schemas = db_manager.get_schemas()
+        logger.debug(f"Retrieved {len(schemas)} schemas")
+        return {
+            "success": True,
+            "schemas": schemas,
+            "count": len(schemas)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list schemas: {e}")
+        return create_error_response(
+            "Failed to retrieve schema list",
+            "database_error",
+            str(e)
+        )
 
 
 def get_analysis_context(
@@ -56,7 +42,6 @@ def get_analysis_context(
     """Get analysis context implementation. Full documentation in main.py."""
     try:
         db_manager = get_db_manager()
-        server_config = config_manager.get_server_config()
         
         # Check connection
         if not db_manager.has_engine():
@@ -186,31 +171,30 @@ def sample_table_data(
     limit: int = 10
 ) -> Dict[str, Any]:
     """Sample table data implementation. Full documentation in main.py."""
-    with error_handler("sample_table_data") as handler:
-        db_manager = get_db_manager()
-        
-        if not db_manager.has_engine():
-            return create_error_response(
-                "No database connection established",
-                "connection_error",
-                "Use connect_database tool first"
-            )
-        
-        try:
-            sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
-            logger.info(f"Retrieved {len(sample_data)} sample rows from {table_name}")
-            return {
-                "success": True,
-                "table_name": table_name,
-                "schema_name": schema_name,
-                "sample_data": sample_data,
-                "row_count": len(sample_data),
-                "limit": limit
-            }
-        except Exception as e:
-            logger.error(f"Failed to sample table data: {e}")
-            return create_error_response(
-                f"Failed to sample data from table '{table_name}'",
-                "database_error",
-                str(e)
-            )
+    db_manager = get_db_manager()
+
+    if not db_manager.has_engine():
+        return create_error_response(
+            "No database connection established",
+            "connection_error",
+            "Use connect_database tool first"
+        )
+
+    try:
+        sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
+        logger.info(f"Retrieved {len(sample_data)} sample rows from {table_name}")
+        return {
+            "success": True,
+            "table_name": table_name,
+            "schema_name": schema_name,
+            "sample_data": sample_data,
+            "row_count": len(sample_data),
+            "limit": limit
+        }
+    except Exception as e:
+        logger.error(f"Failed to sample table data: {e}")
+        return create_error_response(
+            f"Failed to sample data from table '{table_name}'",
+            "database_error",
+            str(e)
+        )

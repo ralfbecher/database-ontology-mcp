@@ -1,20 +1,20 @@
 """Database connection and schema analysis manager."""
 
+import asyncio
+import hashlib
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any, Union
-from functools import lru_cache
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Any
+from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError, ProgrammingError
 from sqlalchemy.pool import QueuePool
-from sqlalchemy.sql import sqltypes
-from urllib.parse import quote_plus
 
 from .constants import (
     CONNECTION_TIMEOUT, 
@@ -293,9 +293,8 @@ class DatabaseManager:
                 "database": database,
                 "username": username
             }
-            
+
             # Generate secure connection ID and store encrypted credentials
-            import hashlib
             self._connection_id = hashlib.sha256(f"{host}:{port}:{database}:{username}".encode()).hexdigest()[:16]
             
             # Store credentials securely (encrypted in memory)
@@ -359,9 +358,8 @@ class DatabaseManager:
             if not all([account, username, warehouse, database]):
                 logger.error("Missing required Snowflake connection parameters")
                 return False
-            
+
             # URL-encode password to handle special characters
-            from urllib.parse import quote_plus
             encoded_password = quote_plus(password) if password else ""
             
             connection_string = (
@@ -449,9 +447,8 @@ class DatabaseManager:
                 return False
             
             # Import the Dremio client
-            import asyncio
             from .dremio_client import create_dremio_client
-            
+
             # Create and test Dremio client connection
             async def test_dremio_connection():
                 if uri and pat:
@@ -1122,17 +1119,15 @@ class DatabaseManager:
     
     def _strip_leading_sql_comments(self, sql_query: str) -> str:
         """Strip leading SQL comments to find the actual SQL statement.
-        
+
         Handles both -- (line comments) and /* */ (block comments) at the beginning of queries.
-        
+
         Args:
             sql_query: SQL query that may contain leading comments
-            
+
         Returns:
             SQL query with leading comments removed
         """
-        import re
-        
         lines = sql_query.split('\n')
         result_lines = []
         in_block_comment = False
