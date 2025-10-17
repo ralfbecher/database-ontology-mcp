@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP
+from mcp.server.fastmcp import Context
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
@@ -379,7 +380,7 @@ def safe_execute(func, *args, **kwargs):
 # --- MCP Tools ---
 
 @mcp.tool()
-def connect_database(db_type: str) -> str:
+async def connect_database(db_type: str, ctx: Context) -> str:
     """Connect to a database using credentials from environment variables.
     
     Args:
@@ -495,8 +496,12 @@ def connect_database(db_type: str) -> str:
         db_name = "DREMIO"
 
     if success:
+        if ctx:
+            await ctx.info(f"Database connected successfully; next call should be list_schemas or analyze_schema")
         return f"Successfully connected to {db_type} database: {db_name}"
     else:
+        if ctx:
+            await ctx.info(f"Database connection failed; check credentials and try again")
         return create_error_response(
             f"Failed to connect to {db_type} database: {db_name}",
             "connection_error"
@@ -504,7 +509,7 @@ def connect_database(db_type: str) -> str:
 
 
 @mcp.tool()
-def list_schemas() -> List[str]:
+async def list_schemas(ctx: Context) -> List[str]:
     """Get a list of available schemas from the connected database.
     
     Returns:
@@ -512,11 +517,16 @@ def list_schemas() -> List[str]:
     """
     db_manager = _server_state.get_db_manager()
     schemas = db_manager.get_schemas()
+    if ctx:
+        if schemas:
+            await ctx.info(f"Found {len(schemas)} schemas; next call should be analyze_schema")
+        else:
+            await ctx.info("No schemas found")
     return schemas if schemas else []
 
 
 @mcp.tool()
-def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
+async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None) -> Dict[str, Any]:
     """Analyze a database schema and return comprehensive table information including relationships.
     
     This tool provides complete schema analysis including:
@@ -619,20 +629,27 @@ def analyze_schema(schema_name: Optional[str] = None) -> Dict[str, Any]:
             "Recommended next step: Run generate_ontology()\n\n"
             "This will create an ontology with:\n"
             "• Database schema linking (db: namespace)\n"
-            "• SQL column references for queries\n" 
+            "• SQL column references for queries\n"
             "• JOIN conditions for relationships\n"
             "• Metadata for fan-trap prevention\n\n"
             "The ontology provides context for accurate SQL generation."
         )
-    
+        schema_result["next_tool"] = "generate_ontology"
+        if ctx:
+            await ctx.info(f"Schema analysis complete with {len(all_table_info)} tables; next call should be generate_ontology")
+    else:
+        if ctx:
+            await ctx.info("Schema analysis found no tables")
+
     return schema_result
 
 
 @mcp.tool()
-def generate_ontology(
+async def generate_ontology(
     schema_info: Optional[str] = None,
     schema_name: Optional[str] = None,
-    base_uri: str = "http://example.com/ontology/"
+    base_uri: str = "http://example.com/ontology/",
+    ctx: Context = None
 ) -> str:
     """Generate an RDF ontology from database schema information and stores it into a ttl file.
     
@@ -748,21 +765,27 @@ def generate_ontology(
         
         logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
         logger.info(f"Saved ontology to: {ontology_file_path}")
-        
+
+        if ctx:
+            await ctx.info(f"Ontology generation complete; next call should be validate_sql_syntax or execute_sql_query")
+
         # Return both the ontology and file path info
         return f"{ontology_ttl}\n\n# Ontology saved to: {ontology_file_path}"
-        
+
     except Exception as e:
         logger.warning(f"Failed to save ontology to file: {e}")
+        if ctx:
+            await ctx.info(f"Ontology file save failed but ontology generated; next call should be validate_sql_syntax or execute_sql_query")
         # Still return the ontology even if file save failed
         return ontology_ttl
 
 
 @mcp.tool()
-def sample_table_data(
+async def sample_table_data(
     table_name: str,
     schema_name: Optional[str] = None,
-    limit: int = 10
+    limit: int = 10,
+    ctx: Context = None
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
     
@@ -780,15 +803,22 @@ def sample_table_data(
     
     if limit <= 0 or limit > 100:
         limit = 10
-    
+
     db_manager = _server_state.get_db_manager()
     sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
+
+    if ctx:
+        if sample_data and len(sample_data) > 0:
+            await ctx.info(f"Sample data retrieved with {len(sample_data)} rows; explore data or continue with other analysis")
+        else:
+            await ctx.info("No sample data found for table")
+
     return sample_data
 
 
 
 @mcp.tool()
-def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
+async def validate_sql_syntax(sql_query: str, ctx: Context = None) -> Dict[str, Any]:
     """Validate SQL query syntax without executing it, providing comprehensive analysis and suggestions.
     
     This tool performs thorough SQL syntax validation and analysis before query execution,
@@ -898,13 +928,18 @@ def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
         
         # Perform validation through database manager
         validation_result = db_manager.validate_sql_syntax(sql_query.strip())
-        
+
         # Log validation results
         if validation_result.get('is_valid'):
             logger.info(f"SQL validation successful: {sql_query[:100]}{'...' if len(sql_query) > 100 else ''}")
+            validation_result["next_tool"] = "execute_sql_query"
+            if ctx:
+                await ctx.info("SQL validation passed; next call should be execute_sql_query")
         else:
             logger.info(f"SQL validation failed: {validation_result.get('error', 'Unknown validation error')}")
-        
+            if ctx:
+                await ctx.info("SQL validation failed; fix the query and try validate_sql_syntax again")
+
         return validation_result
         
     except Exception as e:
@@ -923,9 +958,10 @@ def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def execute_sql_query(
+async def execute_sql_query(
     sql_query: str,
-    limit: int = 1000
+    limit: int = 1000,
+    ctx: Context = None
 ) -> Dict[str, Any]:
     """Execute a validated SQL query against the connected database with comprehensive safety features.
     
@@ -1255,13 +1291,23 @@ def execute_sql_query(
         
         # Execute the query through the database manager
         result = db_manager.execute_sql_query(sql_query.strip(), limit)
-        
+
         # Log execution results
         if result.get('success'):
             logger.info(f"SQL query executed successfully: {result.get('row_count', 0)} rows returned in {result.get('execution_time_ms', 0)}ms")
+            row_count = result.get('row_count', 0)
+            if row_count > 0:
+                result["next_tool"] = "generate_chart"
+                if ctx:
+                    await ctx.info(f"SQL query executed successfully with {row_count} rows; next call should be generate_chart for visualization")
+            else:
+                if ctx:
+                    await ctx.info("SQL query executed successfully but returned no rows")
         else:
             logger.warning(f"SQL query execution failed: {result.get('error', 'Unknown error')}")
-        
+            if ctx:
+                await ctx.info("SQL query execution failed; review error and try again")
+
         return result
         
     except Exception as e:
@@ -1274,7 +1320,7 @@ def execute_sql_query(
 
 
 @mcp.tool()
-def generate_chart(
+async def generate_chart(
     data_source: List[Dict[str, Any]],
     chart_type: str,
     x_column: str,
@@ -1284,7 +1330,8 @@ def generate_chart(
     chart_library: str = "matplotlib",
     chart_style: str = "grouped",
     width: int = 800,
-    height: int = 600
+    height: int = 600,
+    ctx: Context = None
 ) -> str:
     """Generate interactive charts from SQL query results or data analysis.
     
@@ -1394,18 +1441,25 @@ def generate_chart(
     
     # Convert MCP types to simple text response to avoid conversation limits
     if result and len(result) > 0 and hasattr(result[0], 'text'):
+        if ctx:
+            await ctx.info("Chart generated successfully; workflow complete or continue with additional analysis")
         return result[0].text
     else:
+        if ctx:
+            await ctx.info("Chart generation completed; workflow complete or continue with additional analysis")
         return "Chart generation completed"
 
 
 @mcp.tool()
-def get_server_info() -> Dict[str, Any]:
+async def get_server_info(ctx: Context = None) -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
-    
+
     Returns:
         Dictionary containing server information
     """
+    if ctx:
+        await ctx.info("Server info retrieved; next call should be connect_database to start working")
+
     return {
         "name": "Database Ontology MCP Server",
         "version": "0.1.0",
@@ -1420,7 +1474,7 @@ def get_server_info() -> Dict[str, Any]:
         ],
         "tools": [
             "connect_database",
-            "list_schemas", 
+            "list_schemas",
             "analyze_schema",
             "generate_ontology",
             "sample_table_data",
@@ -1428,7 +1482,8 @@ def get_server_info() -> Dict[str, Any]:
             "execute_sql_query",
             "generate_chart",
             "get_server_info"
-        ]
+        ],
+        "next_tool": "connect_database"
     }
 
 
