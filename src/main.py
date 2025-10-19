@@ -2,14 +2,17 @@
 
 import logging
 import os
+import base64
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, AnyUrl
 from fastmcp import FastMCP
 from mcp.server.fastmcp import Context
+import mcp.types as types
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
@@ -48,7 +51,7 @@ else:
 
 # Create server instance with comprehensive instructions
 mcp = FastMCP(
-    "Database Ontology MCP Server",
+    name="Database Ontology MCP Server",
     instructions="""
 # Orionbelt Semantic Layer - Database Ontology MCP Server
 
@@ -323,6 +326,18 @@ analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_s
 """
 )
 
+# --- In-Memory Image Store for MCP Resources ---
+
+# In-memory image store for charts - enables Claude Desktop to display images via resources
+_IMG_STORE: dict[str, bytes] = {}
+
+def _add_image(image_bytes: bytes, chart_id: str) -> str:
+    """Add an image to the store and return its ID."""
+    img_id = f"{chart_id}_{str(uuid.uuid4())[:8]}"
+    _IMG_STORE[img_id] = image_bytes
+    logger.info(f"Added image to store: {img_id} ({len(image_bytes)} bytes)")
+    return img_id
+
 # --- Dependency Management ---
 
 class ServerState:
@@ -380,7 +395,7 @@ def safe_execute(func, *args, **kwargs):
 # --- MCP Tools ---
 
 @mcp.tool()
-async def connect_database(db_type: str, ctx: Context) -> str:
+async def connect_database(db_type: str, ctx: Context = None) -> str:
     """Connect to a database using credentials from environment variables.
     
     Args:
@@ -509,7 +524,7 @@ async def connect_database(db_type: str, ctx: Context) -> str:
 
 
 @mcp.tool()
-async def list_schemas(ctx: Context) -> List[str]:
+async def list_schemas(ctx: Context = None) -> List[str]:
     """Get a list of available schemas from the connected database.
     
     Returns:
@@ -1385,7 +1400,8 @@ async def generate_chart(
         height: Chart height in pixels (default: 600)
     
     Returns:
-        Dictionary containing text description and chart file path (no base64 to avoid conversation limits)
+        List of content blocks including:
+        - TextContent: Chart metadata, URL, and file path (no inline image to avoid context limits)
     
     Example Usage:
         # 1. Simple bar chart from query results
@@ -1420,9 +1436,12 @@ async def generate_chart(
     
     PERFORMANCE:
     - Charts are rendered as PNG and saved to tmp/ directory
+    - Images are served via URL (configurable via MCP_SERVER_PROTOCOL, MCP_SERVER_HOST, MCP_SERVER_PORT in .env)
     - NO base64 encoding to prevent conversation length limits
+    - NO inline ImageContent to prevent session interruption
     - Memory is properly managed (figures closed after rendering)
     - Large datasets are automatically sampled if needed
+    - Users can access charts via URL or local file path
     
     ERROR HANDLING:
     - Missing libraries trigger helpful installation instructions
@@ -1431,23 +1450,41 @@ async def generate_chart(
     - Fallback from Plotly to Matplotlib if dependencies missing
     """
     # Import the implementation from tools module
-    from .tools.chart import generate_chart as chart_impl
-    
-    # Call the implementation and convert response format
-    result = chart_impl(
+    from .tools.chart import generate_chart_bytes
+
+    # Call the implementation to get image bytes and chart_id
+    result = generate_chart_bytes(
         data_source, chart_type, x_column, y_column, color_column,
         title, chart_library, chart_style, width, height
     )
-    
-    # Convert MCP types to simple text response to avoid conversation limits
-    if result and len(result) > 0 and hasattr(result[0], 'text'):
+
+    # Check if chart generation was successful
+    if isinstance(result, dict) and result.get("error"):
         if ctx:
-            await ctx.info("Chart generated successfully; workflow complete or continue with additional analysis")
-        return result[0].text
+            await ctx.info("Chart generation failed")
+        return result.get("error", "Chart generation failed")
+
+    if isinstance(result, tuple) and len(result) == 2:
+        image_bytes, chart_id = result
+
+        # Add image to store
+        img_id = _add_image(image_bytes, chart_id)
+
+        # Notify clients that resources list has changed
+        try:
+            await mcp.server.request_context.session.send_resource_list_changed()
+        except Exception as e:
+            logger.warning(f"Failed to notify resource list changed: {e}")
+
+        if ctx:
+            await ctx.info(f"Chart generated successfully as resource: img://{img_id}")
+
+        # Return resource URI so the user can select it in Claude Desktop
+        return f"Chart ready: img://{img_id}\n\nYou can now view the chart in Claude Desktop by selecting the resource from the resources panel."
     else:
         if ctx:
-            await ctx.info("Chart generation completed; workflow complete or continue with additional analysis")
-        return "Chart generation completed"
+            await ctx.info("Chart generation failed")
+        return "Chart generation failed: unexpected result format"
 
 
 @mcp.tool()
@@ -1485,6 +1522,88 @@ async def get_server_info(ctx: Context = None) -> Dict[str, Any]:
         ],
         "next_tool": "connect_database"
     }
+
+
+# --- MCP Resources Handlers for Images ---
+
+@mcp.resource(uri="img://{img_id}", name="Chart Image", description="Chart image generated by generate_chart tool", mime_type="image/png")
+async def read_chart_image(img_id: str) -> str:
+    """Read a chart image resource and return it as base64.
+
+    Args:
+        img_id: The image ID to retrieve
+
+    Returns:
+        Base64-encoded image data
+    """
+    image_bytes = _IMG_STORE.get(img_id)
+
+    if not image_bytes:
+        logger.error(f"Image resource not found: {img_id}")
+        raise ValueError(f"Image resource not found: {img_id}")
+
+    # Return base64-encoded image
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    logger.info(f"Read image resource: {img_id} ({len(image_bytes)} bytes)")
+
+    return b64
+
+
+# --- Static File Serving for Charts ---
+
+@mcp.custom_route("/tmp/{filename}", methods=["GET"])
+async def serve_tmp_file(request):
+    """Serve static files (images, ontologies) from the tmp directory.
+
+    This endpoint enables Claude Desktop to display generated charts and access
+    ontology files by providing a URL to the image/file.
+    """
+    from starlette.responses import FileResponse, JSONResponse
+
+    filename = request.path_params.get("filename")
+
+    if not filename:
+        return JSONResponse(
+            {"error": "Filename is required"},
+            status_code=400
+        )
+
+    # Security: Prevent path traversal attacks
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return JSONResponse(
+            {"error": "Invalid filename"},
+            status_code=400
+        )
+
+    # Build file path
+    TMP_DIR = Path(__file__).parent.parent / "tmp"
+    file_path = TMP_DIR / filename
+
+    # Check if file exists
+    if not file_path.exists() or not file_path.is_file():
+        return JSONResponse(
+            {"error": f"File '{filename}' not found"},
+            status_code=404
+        )
+
+    # Determine media type based on file extension
+    media_type = "application/octet-stream"
+    if filename.endswith(".png"):
+        media_type = "image/png"
+    elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
+        media_type = "image/jpeg"
+    elif filename.endswith(".svg"):
+        media_type = "image/svg+xml"
+    elif filename.endswith(".ttl"):
+        media_type = "text/turtle"
+
+    logger.info(f"Serving file: {filename} ({media_type})")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=filename
+    )
 
 
 # --- Cleanup on shutdown ---
