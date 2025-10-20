@@ -3,7 +3,6 @@
 import logging
 import os
 import base64
-import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -11,6 +10,7 @@ from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from pydantic import BaseModel, AnyUrl
 from fastmcp import FastMCP
+from fastmcp.utilities.types import Image
 from mcp.server.fastmcp import Context
 import mcp.types as types
 
@@ -326,17 +326,6 @@ analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_s
 """
 )
 
-# --- In-Memory Image Store for MCP Resources ---
-
-# In-memory image store for charts - enables Claude Desktop to display images via resources
-_IMG_STORE: dict[str, bytes] = {}
-
-def _add_image(image_bytes: bytes, chart_id: str) -> str:
-    """Add an image to the store and return its ID."""
-    img_id = f"{chart_id}_{str(uuid.uuid4())[:8]}"
-    _IMG_STORE[img_id] = image_bytes
-    logger.info(f"Added image to store: {img_id} ({len(image_bytes)} bytes)")
-    return img_id
 
 # --- Dependency Management ---
 
@@ -1347,13 +1336,13 @@ async def generate_chart(
     width: int = 800,
     height: int = 600,
     ctx: Context = None
-) -> str:
+) -> Image:
     """Generate interactive charts from SQL query results or data analysis.
-    
+
     📊 VISUALIZATION CAPABILITIES:
     This tool creates professional data visualizations directly in Claude Desktop,
     supporting both static (Matplotlib) and interactive (Plotly) chart libraries.
-    
+
     CHART TYPES:
     • **bar**: Bar charts for categorical comparisons
       - Grouped bars for multi-series data
@@ -1367,7 +1356,7 @@ async def generate_chart(
     • **heatmap**: Heat maps for matrix data
       - Correlation matrices
       - Pivot table visualizations
-    
+
     LIBRARIES:
     • **matplotlib** (default): Static PNG charts
       - Better for simple visualizations
@@ -1377,7 +1366,7 @@ async def generate_chart(
       - Hover tooltips and zoom
       - Better for complex data exploration
       - Falls back to matplotlib if not available
-    
+
     DATA PREPARATION:
     The tool automatically handles:
     - SQL query results from execute_sql_query
@@ -1385,7 +1374,7 @@ async def generate_chart(
     - Pandas DataFrame conversion
     - Missing value handling
     - Automatic type detection
-    
+
     Args:
         data_source: List of dictionaries containing the data to visualize.
                     Typically the 'data' field from execute_sql_query results.
@@ -1398,51 +1387,47 @@ async def generate_chart(
         chart_style: 'grouped' or 'stacked' for bar charts (default: grouped)
         width: Chart width in pixels (default: 800)
         height: Chart height in pixels (default: 600)
-    
+
     Returns:
-        List of content blocks including:
-        - TextContent: Chart metadata, URL, and file path (no inline image to avoid context limits)
-    
+        Image object that can be displayed in Claude Desktop
+
     Example Usage:
         # 1. Simple bar chart from query results
         result = execute_sql_query("SELECT category, SUM(sales) as total FROM orders GROUP BY category")
         generate_chart(result['data'], 'bar', 'category', 'total')
-        
+
         # 2. Time series line chart
         result = execute_sql_query("SELECT date, revenue FROM daily_sales ORDER BY date")
         generate_chart(result['data'], 'line', 'date', 'revenue', title='Revenue Trend')
-        
+
         # 3. Multi-series grouped bar chart
         result = execute_sql_query(\"\"\"
-            SELECT region, product, SUM(quantity) as units 
-            FROM sales 
+            SELECT region, product, SUM(quantity) as units
+            FROM sales
             GROUP BY region, product
         \"\"\")
         generate_chart(result['data'], 'bar', 'region', 'units', 'product', chart_style='grouped')
-        
+
         # 4. Correlation heatmap
         result = execute_sql_query("SELECT * FROM metrics")
         generate_chart(result['data'], 'heatmap', x_column='metric1')
-        
+
         # 5. Scatter plot with categories
         result = execute_sql_query("SELECT price, quality, brand FROM products")
         generate_chart(result['data'], 'scatter', 'price', 'quality', 'brand')
-    
+
     STYLING NOTES:
     - Long labels are automatically rotated for readability
     - Colors are chosen from professional palettes
     - Legends appear when color_column is specified
     - Grid lines and axes are optimized for clarity
-    
+
     PERFORMANCE:
     - Charts are rendered as PNG and saved to tmp/ directory
-    - Images are served via URL (configurable via MCP_SERVER_PROTOCOL, MCP_SERVER_HOST, MCP_SERVER_PORT in .env)
-    - NO base64 encoding to prevent conversation length limits
-    - NO inline ImageContent to prevent session interruption
+    - Images are returned directly for display in Claude Desktop
     - Memory is properly managed (figures closed after rendering)
     - Large datasets are automatically sampled if needed
-    - Users can access charts via URL or local file path
-    
+
     ERROR HANDLING:
     - Missing libraries trigger helpful installation instructions
     - Invalid column names show available columns
@@ -1462,29 +1447,37 @@ async def generate_chart(
     if isinstance(result, dict) and result.get("error"):
         if ctx:
             await ctx.info("Chart generation failed")
-        return result.get("error", "Chart generation failed")
+        raise RuntimeError(result.get("error", "Chart generation failed"))
 
     if isinstance(result, tuple) and len(result) == 2:
         image_bytes, chart_id = result
 
-        # Add image to store
-        img_id = _add_image(image_bytes, chart_id)
+        # Save the image to tmp directory
+        from .chart_utils import save_image_to_tmp
+        image_file_path = save_image_to_tmp(image_bytes, chart_id, 'png')
 
-        # Notify clients that resources list has changed
-        try:
-            await mcp.server.request_context.session.send_resource_list_changed()
-        except Exception as e:
-            logger.warning(f"Failed to notify resource list changed: {e}")
+        if not image_file_path:
+            if ctx:
+                await ctx.info("Chart generation failed to save file")
+            raise RuntimeError("Failed to save chart image to file")
 
         if ctx:
-            await ctx.info(f"Chart generated successfully as resource: img://{img_id}")
+            await ctx.info(f"Chart generated successfully: {image_file_path}")
 
-        # Return resource URI so the user can select it in Claude Desktop
-        return f"Chart ready: img://{img_id}\n\nYou can now view the chart in Claude Desktop by selecting the resource from the resources panel."
+        # Return Image object for Claude Desktop display
+        return Image(path=str(image_file_path))
     else:
         if ctx:
             await ctx.info("Chart generation failed")
-        return "Chart generation failed: unexpected result format"
+        raise RuntimeError("Chart generation failed: unexpected result format")
+
+
+# Resource for last generated chart image. Claude Desktop ia not able to include dynamic resources.
+@mcp.resource("images://last-generated-chart", mime_type="image/png")
+def last_generated_chart() -> bytes: # FastMCP Image doesn't work here
+    """Last generated chart as image"""
+    with open("tmp/last-generated-chart.png", "rb") as f:
+        return f.read()
 
 
 @mcp.tool()
@@ -1522,88 +1515,6 @@ async def get_server_info(ctx: Context = None) -> Dict[str, Any]:
         ],
         "next_tool": "connect_database"
     }
-
-
-# --- MCP Resources Handlers for Images ---
-
-@mcp.resource(uri="img://{img_id}", name="Chart Image", description="Chart image generated by generate_chart tool", mime_type="image/png")
-async def read_chart_image(img_id: str) -> str:
-    """Read a chart image resource and return it as base64.
-
-    Args:
-        img_id: The image ID to retrieve
-
-    Returns:
-        Base64-encoded image data
-    """
-    image_bytes = _IMG_STORE.get(img_id)
-
-    if not image_bytes:
-        logger.error(f"Image resource not found: {img_id}")
-        raise ValueError(f"Image resource not found: {img_id}")
-
-    # Return base64-encoded image
-    b64 = base64.b64encode(image_bytes).decode("ascii")
-    logger.info(f"Read image resource: {img_id} ({len(image_bytes)} bytes)")
-
-    return b64
-
-
-# --- Static File Serving for Charts ---
-
-@mcp.custom_route("/tmp/{filename}", methods=["GET"])
-async def serve_tmp_file(request):
-    """Serve static files (images, ontologies) from the tmp directory.
-
-    This endpoint enables Claude Desktop to display generated charts and access
-    ontology files by providing a URL to the image/file.
-    """
-    from starlette.responses import FileResponse, JSONResponse
-
-    filename = request.path_params.get("filename")
-
-    if not filename:
-        return JSONResponse(
-            {"error": "Filename is required"},
-            status_code=400
-        )
-
-    # Security: Prevent path traversal attacks
-    if ".." in filename or "/" in filename or "\\" in filename:
-        return JSONResponse(
-            {"error": "Invalid filename"},
-            status_code=400
-        )
-
-    # Build file path
-    TMP_DIR = Path(__file__).parent.parent / "tmp"
-    file_path = TMP_DIR / filename
-
-    # Check if file exists
-    if not file_path.exists() or not file_path.is_file():
-        return JSONResponse(
-            {"error": f"File '{filename}' not found"},
-            status_code=404
-        )
-
-    # Determine media type based on file extension
-    media_type = "application/octet-stream"
-    if filename.endswith(".png"):
-        media_type = "image/png"
-    elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
-        media_type = "image/jpeg"
-    elif filename.endswith(".svg"):
-        media_type = "image/svg+xml"
-    elif filename.endswith(".ttl"):
-        media_type = "text/turtle"
-
-    logger.info(f"Serving file: {filename} ({media_type})")
-
-    return FileResponse(
-        path=str(file_path),
-        media_type=media_type,
-        filename=filename
-    )
 
 
 # --- Cleanup on shutdown ---
