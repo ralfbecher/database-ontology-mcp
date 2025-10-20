@@ -1472,14 +1472,6 @@ async def generate_chart(
         raise RuntimeError("Chart generation failed: unexpected result format")
 
 
-# Resource for last generated chart image. Claude Desktop ia not able to include dynamic resources.
-@mcp.resource("images://last-generated-chart", mime_type="image/png")
-def last_generated_chart() -> bytes: # FastMCP Image doesn't work here
-    """Last generated chart as image"""
-    with open("tmp/last-generated-chart.png", "rb") as f:
-        return f.read()
-
-
 @mcp.tool()
 async def get_server_info(ctx: Context = None) -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
