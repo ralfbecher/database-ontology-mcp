@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![FastMCP](https://img.shields.io/badge/FastMCP-2.10+-blue)](https://github.com/jlowin/fastmcp)
+[![FastMCP](https://img.shields.io/badge/FastMCP-2.12+-blue)](https://github.com/jlowin/fastmcp)
 
 This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
 
@@ -23,10 +23,10 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 
 ### 🎯 9 Essential Tools
 
-- **One main tool** (`get_analysis_context`) with automatic ontology generation
-- **Interactive charting tool** (`create_chart`) for data visualization
-- **Consolidated workflow** - no more tool confusion or bloat
-- **Inline functionality** - reduces dependencies between tools
+- **Streamlined workflow** with focused, purpose-built tools
+- **Interactive charting** (`generate_chart`) with direct image rendering
+- **Comprehensive schema analysis** with automatic ontology generation
+- **Built-in workflow guidance** via FastMCP Context integration
 - **Focus on results** - maximum effectiveness with minimum complexity
 
 ### 🧠 Automatic Ontology Generation
@@ -66,7 +66,7 @@ The project uses the following Python libraries:
 #### **Core MCP Framework**
 
 ```bash
-fastmcp>=2.10.0,<3.0.0           # FastMCP framework for MCP server implementation
+fastmcp>=2.12.0                  # FastMCP framework for MCP server implementation
 ```
 
 #### **Database Connectivity**
@@ -129,7 +129,7 @@ If you encounter issues with automatic installation, install key components manu
 
 ```bash
 # Core framework
-pip install fastmcp>=2.10.0
+pip install fastmcp>=2.12.0
 
 # Database support
 pip install sqlalchemy>=2.0.0 psycopg2-binary>=2.9.0
@@ -175,17 +175,22 @@ sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
 database-ontology-mcp/
 ├── src/
 │   ├── __init__.py                 # Package initialization
-│   ├── main.py                     # FastMCP server entry point (11 tools, 106 lines)
-│   ├── main_original.py            # Backup of previous complex version (2143 lines)
-│   ├── main_backup.py              # Additional backup
+│   ├── main.py                     # FastMCP server entry point (9 tools)
 │   ├── database_manager.py         # Database connection and analysis
 │   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
+│   ├── security.py                 # Security and validation utilities
+│   ├── chart_utils.py              # Chart generation utilities
 │   ├── config.py                   # Configuration management with .env support
 │   ├── constants.py                # Application constants and settings
-│   └── utils.py                    # Utility functions
-├── run_server.py                   # Server startup script
+│   ├── utils.py                    # Utility functions
+│   └── tools/                      # Tool implementations
+│       ├── chart.py                # Chart generation tool
+│       └── schema.py               # Schema analysis tools
+├── tests/                          # Test suite
+├── tmp/                            # Generated files (ontologies, charts)
+├── server.py                       # Server startup script
 ├── .env                            # Environment configuration (DO NOT COMMIT)
-├── requirements.txt                # Python dependencies
+├── pyproject.toml                  # Project metadata and dependencies
 └── README.md                       # This comprehensive guide
 ```
 
@@ -312,49 +317,23 @@ python server.py
 
 ## MCP Tools Reference
 
-### Main Tool: `get_analysis_context`
+### Workflow Guidance
 
-The primary tool that provides complete database analysis with automatic ontology generation.
+The server provides **built-in workflow guidance** through FastMCP Context integration, automatically suggesting the next recommended tool after each operation. This helps Claude Desktop users follow optimal analytical workflows without confusion.
 
-**Purpose**: Single tool that gives Claude Desktop everything it needs for database analysis.
+**Key Workflows:**
 
-**Parameters:**
+1. **Complete Schema Analysis → Ontology → SQL**
+   - `connect_database` → `analyze_schema` → `generate_ontology` → `execute_sql_query`
 
-```typescript
-{
-  schema_name?: string,     // Optional, defaults to public/default schema
-  base_uri?: string,       // Optional, uses ONTOLOGY_BASE_URI from .env
-  include_sample_data?: boolean  // Optional, includes sample data for context
-}
-```
+2. **Quick Data Exploration**
+   - `connect_database` → `list_schemas` → `sample_table_data`
 
-**What it includes automatically:**
+3. **SQL Validation → Execution → Visualization**
+   - `validate_sql_syntax` → `execute_sql_query` → `generate_chart`
 
-- Complete schema analysis (tables, columns, types, constraints)
-- Relationship mapping with cardinality detection
-- **Automatic ontology generation** with SQL references
-- Data sampling for context (when requested)
-- Fan-trap detection and prevention guidance
-- Business context inference
-
-**Returns:**
-
-```typescript
-{
-  schema_analysis: {
-    schema: string,
-    tables: Array<TableInfo>,
-    relationships: Array<RelationshipInfo>,
-    fan_trap_warnings: Array<string>
-  },
-  ontology: string,  // RDF/Turtle format with db:sqlReference annotations
-  sample_data?: Array<TableSamples>,
-  recommendations: {
-    safe_query_patterns: Array<string>,
-    risk_warnings: Array<string>
-  }
-}
-```
+4. **Relationship Analysis for Complex Queries**
+   - `analyze_schema` (check FKs) → `validate_sql_syntax` → `execute_sql_query`
 
 ### Core Database Tools
 
@@ -397,25 +376,33 @@ Get available database schemas.
 
 **Returns:** `Array<string>` of schema names
 
-#### 3. `generate_ontology`
+#### 3. `analyze_schema`
 
-Manual ontology generation when you need specific control.
+Analyze database schema and return comprehensive table information including relationships.
 
 **Parameters:**
+- `schema_name` (optional): Name of schema to analyze
 
-```typescript
-{
-  schema_name?: string,
-  base_uri?: string,
-  include_business_context?: boolean
-}
-```
+**Returns:** Schema structure with tables, columns, primary keys, foreign keys, and relationship information
 
-**Returns:** RDF ontology in Turtle format with embedded SQL references
+**Key Feature:** Foreign key analysis is critical for preventing fan-traps in SQL queries
+
+#### 4. `generate_ontology`
+
+Generate RDF/OWL ontology from database schema with SQL mapping annotations.
+
+**Parameters:**
+- `schema_info` (optional): JSON string with schema information
+- `schema_name` (optional): Name of schema to generate ontology from
+- `base_uri` (optional): Base URI for ontology (default: http://example.com/ontology/)
+
+**Returns:** RDF ontology in Turtle format with `db:` namespace annotations
+
+**Output:** Ontology is saved to `tmp/ontology_{schema}_{timestamp}.ttl`
 
 ### Data & Validation Tools
 
-#### 4. `sample_table_data`
+#### 5. `sample_table_data`
 
 Secure data sampling with comprehensive validation.
 
@@ -429,31 +416,25 @@ Secure data sampling with comprehensive validation.
 }
 ```
 
-#### 5. `validate_sql_syntax`
+#### 6. `validate_sql_syntax`
 
-Advanced SQL validation with fan-trap detection.
+Advanced SQL validation with comprehensive analysis.
 
 **Parameters:**
-
-```typescript
-{
-  sql_query: string; // SQL to validate
-}
-```
+- `sql_query` (required): SQL query to validate
 
 **Returns:**
+- `is_valid`: Boolean validation result
+- `database_dialect`: Detected database dialect
+- `validation_results`: Detailed component analysis
+- `suggestions`: Optimization recommendations
+- `warnings`: Performance concerns
+- `errors`: Specific syntax errors
+- `security_analysis`: Security findings
 
-```typescript
-{
-  is_valid: boolean,
-  syntax_errors: Array<string>,
-  fan_trap_warnings: Array<string>,
-  safety_score: number,
-  recommendations: Array<string>
-}
-```
+**Features:** Multi-database syntax checking, injection detection, performance analysis
 
-#### 6. `execute_sql_query`
+#### 7. `execute_sql_query`
 
 Safe SQL execution with comprehensive safety protocols.
 
@@ -481,7 +462,29 @@ FROM sales s LEFT JOIN returns r ON s.customer_id = r.customer_id
 GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 ```
 
-#### 7. `get_server_info`
+#### 8. `generate_chart`
+
+Generate interactive charts from SQL query results.
+
+**Parameters:**
+- `data_source` (required): List of dictionaries (typically from `execute_sql_query`)
+- `chart_type` (required): 'bar', 'line', 'scatter', or 'heatmap'
+- `x_column` (required): Column name for X-axis
+- `y_column` (optional): Column name for Y-axis
+- `color_column` (optional): Column for color grouping
+- `title` (optional): Chart title (auto-generated if not provided)
+- `chart_library` (optional): 'matplotlib' or 'plotly' (default: matplotlib)
+- `chart_style` (optional): 'grouped' or 'stacked' for bar charts
+- `width` (optional): Chart width in pixels (default: 800)
+- `height` (optional): Chart height in pixels (default: 600)
+
+**Returns:** FastMCP Image object for direct display in Claude Desktop
+
+**Output:** Chart saved to `tmp/chart_{timestamp}.png`
+
+**Key Feature:** Direct image rendering without base64 encoding for better performance
+
+#### 9. `get_server_info`
 
 Comprehensive server status and configuration information.
 
@@ -491,27 +494,36 @@ Comprehensive server status and configuration information.
 
 ### Recommended Analytical Session Startup
 
-Use this prompt to start an analytical session with automatic ontology integration:
+The server provides **built-in comprehensive instructions** that are automatically sent to Claude Desktop, guiding optimal tool usage and workflows. This eliminates confusion and ensures accurate Text-to-SQL generation with fan-trap prevention.
+
+**Recommended Starting Prompts:**
 
 ```
-I need to analyze the database. Please use get_analysis_context to provide a complete overview including schema analysis and ontology generation, then help me understand the data structure and suggest interesting analytical queries.
+"Connect to my PostgreSQL database and analyze the schema with ontology generation"
 ```
 
-### Why This Works Better
+```
+"I need to query my Snowflake data warehouse - help me understand the schema relationships first"
+```
 
-**Before (Complex Version)**:
+### Key Improvements in Recent Updates
 
-- 17+ tools caused confusion
-- Claude Desktop ignored ontology generation
-- Manual steps required for semantic context
-- Tool dependencies created workflow issues
+**FastMCP 2.12+ Integration**:
+- Updated to latest FastMCP version with new resource API
+- Removed deprecated `@mcp.list_resources()` and `@mcp.read_resource()` decorators
+- Implemented new `@mcp.resource()` decorator with URI templates
 
-**Now (Refactored Version)**:
+**Chart Generation Enhancement**:
+- Simplified to return Image objects directly (no resource URIs)
+- Removed in-memory image store complexity
+- Direct image rendering for better Claude Desktop integration
+- Charts saved to `tmp/` directory for reference
 
-- 8 essential tools, crystal clear purpose
-- Main tool automatically includes ontology
-- No manual ontology steps needed
-- Self-contained functionality
+**Workflow Guidance**:
+- Added FastMCP Context parameter to all 9 tools
+- Automatic next-tool suggestions after each operation
+- Comprehensive server instructions for optimal workflows
+- Built-in fan-trap prevention guidance
 
 ## Fan-Trap Protection
 
@@ -613,6 +625,38 @@ else:
 "
 ```
 
+## 🧪 Testing & Quality
+
+The project includes a comprehensive test suite with significant improvements in recent updates:
+
+**Test Coverage:**
+- 70% pass rate with 24 failures (down from 42)
+- Fixed 18 tests across Ontology Generator, Security, and Database Manager
+- Comprehensive test coverage for core functionality
+
+**Security Testing:**
+- SQL injection pattern detection (including comment-based attacks)
+- Identifier sanitization validation
+- Credential handling security
+
+**Test Improvements:**
+- Enhanced mock setups for database connections
+- Better test isolation and cleanup
+- Documented remaining test issues for future work
+
+**Running Tests:**
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=src --cov-report=term-missing
+
+# Run specific test file
+pytest tests/test_database_manager.py
+```
+
 ## Configuration Troubleshooting
 
 ### Snowflake Connection Issues
@@ -641,6 +685,33 @@ else:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+## 📋 Recent Changes
+
+### Version 0.3.0
+
+**FastMCP 2.12+ Upgrade** (Oct 2025):
+- Upgraded to FastMCP 2.12+ with new resource API
+- Replaced deprecated resource decorators
+- Fixed resource API deprecation warnings
+
+**Chart Generation Simplification** (Oct 2025):
+- Return Image objects directly instead of resource URIs
+- Removed in-memory image store complexity
+- Simplified error handling with exceptions
+- Better Claude Desktop integration
+
+**Workflow Guidance Enhancement** (Oct 2025):
+- Added FastMCP Context parameter to all tools
+- Automatic next-tool suggestions
+- Comprehensive MCP server instructions
+- Improved client workflow guidance
+
+**Test & Security Improvements** (Oct 2025):
+- 43% reduction in test failures (18 tests fixed)
+- Enhanced SQL injection detection (comment-based attacks)
+- Improved identifier sanitization
+- Better ontology generation with enrichment methods
+
 ## Contributing
 
 We welcome contributions! Key areas for improvement:
@@ -649,6 +720,7 @@ We welcome contributions! Key areas for improvement:
 2. **Enhanced Ontology Patterns** (domain-specific templates)
 3. **Advanced Query Safety** (more sophisticated fan-trap detection)
 4. **Performance Optimization** (caching, connection pooling)
+5. **Test Coverage** (increase from current 70% pass rate)
 
 ### Development Process
 
@@ -656,7 +728,26 @@ We welcome contributions! Key areas for improvement:
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Test with both PostgreSQL and Snowflake
 4. Ensure all dependencies install correctly
-5. Run code quality checks
+5. Run code quality checks (`pytest`, `black`, `flake8`)
 6. Submit Pull Request
+
+### Development Setup
+
+```bash
+# Install development dependencies
+uv sync --dev
+
+# Run tests
+pytest
+
+# Format code
+black src/ tests/
+
+# Run linting
+flake8 src/ tests/
+
+# Type checking
+mypy src/
+```
 
 ---
