@@ -8,11 +8,10 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, AnyUrl
+from pydantic import BaseModel
 from fastmcp import FastMCP
 from fastmcp.utilities.types import Image
 from mcp.server.fastmcp import Context
-import mcp.types as types
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator

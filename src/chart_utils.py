@@ -7,8 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-import mcp.types as types
-
 logger = logging.getLogger(__name__)
 
 # Temporary directory for file storage
@@ -144,15 +142,3 @@ def save_image_to_tmp(image_bytes: bytes, chart_id: str, format: str) -> Optiona
     except Exception as e:
         logger.warning(f"Failed to save {format.upper()} file: {e}")
         return None
-
-
-def create_error_response(message: str, error_type: str, details: str = None) -> Dict[str, Any]:
-    """Create a standardized error response."""
-    error_response = {
-        "success": False,
-        "error": message,
-        "error_type": error_type
-    }
-    if details:
-        error_response["details"] = details
-    return error_response

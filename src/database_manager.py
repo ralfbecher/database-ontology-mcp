@@ -28,10 +28,9 @@ from .constants import (
     DEFAULT_SAMPLE_LIMIT
 )
 from .security import (
-    SecureCredentialManager, 
-    sql_validator, 
+    SecureCredentialManager,
+    sql_validator,
     identifier_validator,
-    create_secure_connection_string,
     audit_log_security_event,
     SecurityLevel
 )

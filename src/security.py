@@ -321,31 +321,6 @@ class IdentifierValidator:
         return sanitized[:128]
 
 
-def create_secure_connection_string(db_type: str, **params: Any) -> str:
-    """Create secure connection string without exposing credentials in logs."""
-    if db_type == "postgresql":
-        # Use environment variables or secure parameter passing
-        host = params.get('host', 'localhost')
-        port = params.get('port', 5432)
-        database = params.get('database')
-
-        # Don't include credentials in the connection string construction
-        # They should be passed separately to SQLAlchemy
-        return f"postgresql://{host}:{port}/{database}"
-
-    elif db_type == "snowflake":
-        account = params.get('account')
-        database = params.get('database')
-        schema = params.get('schema', 'PUBLIC')
-        warehouse = params.get('warehouse')
-
-        return (f"snowflake://{account}/{database}/"
-                f"{schema}?warehouse={warehouse}")
-
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
-
-
 def audit_log_security_event(
     event_type: str,
     details: Dict[str, Any],

@@ -12,12 +12,11 @@ from .ontology import generate_ontology, load_ontology_from_file
 from .query import validate_sql_syntax, execute_sql_query
 from .chart import generate_chart
 from .info import get_server_info
-from .semantic import generate_semantic_descriptions
 
 __all__ = [
     'connect_database',
     'diagnose_connection_issue',
-    'list_schemas', 
+    'list_schemas',
     'get_analysis_context',
     'sample_table_data',
     'generate_ontology',
@@ -25,6 +24,5 @@ __all__ = [
     'validate_sql_syntax',
     'execute_sql_query',
     'generate_chart',
-    'get_server_info',
-    'generate_semantic_descriptions'
+    'get_server_info'
 ]

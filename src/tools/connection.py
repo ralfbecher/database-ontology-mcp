@@ -5,7 +5,6 @@ from typing import Dict, Any, Optional
 
 from ..config import config_manager
 from ..shared import get_db_manager, create_error_response
-from ..utils import sanitize_for_logging
 
 logger = logging.getLogger(__name__)
 
