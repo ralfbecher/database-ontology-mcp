@@ -14,20 +14,51 @@ TMP_DIR = Path(__file__).parent.parent / "tmp"
 
 
 def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width=800, height=600):
-    """Create Plotly chart based on type."""
+    """Create Plotly chart based on type.
+
+    Args:
+        y_column: Can be a string (single measure) or list of strings (multiple measures for line charts)
+    """
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
-    
+
     if chart_type == "bar":
-        if chart_style == "stacked":
-            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title, 
+        if chart_style == "stacked" and color_column:
+            # Stacked bar chart with two dimensions: x_column (categories) and color_column (stack groups)
+            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title,
                         barmode='stack')
-        else:  # grouped
-            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title, 
+        elif color_column:
+            # Grouped bar chart
+            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title,
                         barmode='group')
+        else:
+            # Simple bar chart
+            fig = px.bar(df, x=x_column, y=y_column, title=title)
     elif chart_type == "line":
-        fig = px.line(df, x=x_column, y=y_column, color=color_column, title=title)
+        # Support multiple measures for line charts
+        if isinstance(y_column, list):
+            # Multiple measures - create separate line for each measure
+            fig = go.Figure()
+            for measure in y_column:
+                if measure not in df.columns:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=df[x_column],
+                    y=df[measure],
+                    mode='lines+markers',
+                    name=measure
+                ))
+            fig.update_layout(
+                title=title,
+                xaxis_title=x_column,
+                yaxis_title="Value",
+                showlegend=True
+            )
+        else:
+            # Single measure with optional color grouping
+            fig = px.line(df, x=x_column, y=y_column, color=color_column, title=title)
+
         # Enhance for time series
         if df[x_column].dtype in ['datetime64[ns]', 'object']:
             try:
@@ -75,28 +106,46 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
 
 
 def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height):
-    """Create Matplotlib/Seaborn chart based on type."""
+    """Create Matplotlib/Seaborn chart based on type.
+
+    Args:
+        y_column: Can be a string (single measure) or list of strings (multiple measures for line charts)
+    """
     import matplotlib.pyplot as plt
     import seaborn as sns
-    
+
     # Set figure size
     fig, ax = plt.subplots(figsize=(width/100, height/100))
-    
+
     if chart_type == "bar":
         if color_column and chart_style == "stacked":
+            # Stacked bar chart with two dimensions: x_column and color_column
             pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, fill_value=0)
             pivot_df.plot(kind='bar', stacked=True, ax=ax)
         elif color_column:
+            # Grouped bar chart
             sns.barplot(data=df, x=x_column, y=y_column, hue=color_column, ax=ax)
         else:
+            # Simple bar chart
             sns.barplot(data=df, x=x_column, y=y_column, ax=ax)
     elif chart_type == "line":
-        if color_column:
+        # Support multiple measures for line charts
+        if isinstance(y_column, list):
+            # Multiple measures - create separate line for each measure
+            for measure in y_column:
+                if measure not in df.columns:
+                    continue
+                ax.plot(df[x_column], df[measure], label=measure, marker='o')
+            ax.legend()
+            ax.set_ylabel("Value")
+        elif color_column:
+            # Single measure with color grouping
             for group in df[color_column].unique():
                 group_data = df[df[color_column] == group]
                 ax.plot(group_data[x_column], group_data[y_column], label=group, marker='o')
             ax.legend()
         else:
+            # Simple line chart
             ax.plot(df[x_column], df[y_column], marker='o')
     elif chart_type == "scatter":
         sns.scatterplot(data=df, x=x_column, y=y_column, hue=color_column, ax=ax, s=60)

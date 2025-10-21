@@ -13,7 +13,7 @@ def generate_chart_bytes(
     data_source: List[Dict[str, Any]],
     chart_type: str,
     x_column: str,
-    y_column: Optional[str] = None,
+    y_column: Optional[Union[str, List[str]]] = None,
     color_column: Optional[str] = None,
     title: Optional[str] = None,
     chart_library: str = "matplotlib",
@@ -22,6 +22,20 @@ def generate_chart_bytes(
     height: int = 600
 ) -> Union[Tuple[bytes, str], Dict[str, str]]:
     """Generate chart and return image bytes and chart_id for MCP resources.
+
+    Args:
+        data_source: List of dictionaries containing the data
+        chart_type: Type of chart (bar, line, scatter, heatmap)
+        x_column: Column name for X-axis
+        y_column: Column name(s) for Y-axis. Can be:
+            - String: single measure (all chart types)
+            - List of strings: multiple measures (line charts only - creates multi-line comparison)
+        color_column: Column for color grouping (for stacked/grouped bar charts)
+        title: Chart title
+        chart_library: "matplotlib" or "plotly"
+        chart_style: "grouped" or "stacked" (for bar charts)
+        width: Chart width in pixels
+        height: Chart height in pixels
 
     Returns:
         Tuple of (image_bytes, chart_id) on success
@@ -70,15 +84,32 @@ def generate_chart_bytes(
         if x_column not in df.columns:
             return {"error": f"❌ X-axis column '{x_column}' not found in data. Available columns: {list(df.columns)}"}
 
-        if chart_type in ["bar", "line", "scatter"] and y_column and y_column not in df.columns:
-            return {"error": f"❌ Y-axis column '{y_column}' not found in data. Available columns: {list(df.columns)}"}
+        # Validate y_column(s)
+        if chart_type in ["bar", "line", "scatter"] and y_column:
+            if isinstance(y_column, list):
+                # Multiple measures (only supported for line charts)
+                if chart_type != "line":
+                    return {"error": f"❌ Multiple y_columns only supported for line charts, not {chart_type}"}
+                missing_cols = [col for col in y_column if col not in df.columns]
+                if missing_cols:
+                    return {"error": f"❌ Y-axis columns {missing_cols} not found in data. Available columns: {list(df.columns)}"}
+            else:
+                # Single measure
+                if y_column not in df.columns:
+                    return {"error": f"❌ Y-axis column '{y_column}' not found in data. Available columns: {list(df.columns)}"}
 
         # Generate title if not provided
         if not title:
             if chart_type == "bar":
-                title = f"{y_column or 'Count'} by {x_column}"
+                y_label = y_column if isinstance(y_column, str) else 'Count'
+                title = f"{y_label} by {x_column}"
+                if chart_style == "stacked" and color_column:
+                    title += f" (stacked by {color_column})"
             elif chart_type == "line":
-                title = f"{y_column} over {x_column}"
+                if isinstance(y_column, list):
+                    title = f"Comparison of {', '.join(y_column)} over {x_column}"
+                else:
+                    title = f"{y_column} over {x_column}"
             elif chart_type == "scatter":
                 title = f"{y_column} vs {x_column}"
             elif chart_type == "heatmap":

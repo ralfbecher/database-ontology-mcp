@@ -5,7 +5,7 @@ import os
 import base64
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -1327,7 +1327,7 @@ async def generate_chart(
     data_source: List[Dict[str, Any]],
     chart_type: str,
     x_column: str,
-    y_column: Optional[str] = None,
+    y_column: Optional[Union[str, List[str]]] = None,
     color_column: Optional[str] = None,
     title: Optional[str] = None,
     chart_library: str = "matplotlib",
@@ -1344,14 +1344,17 @@ async def generate_chart(
 
     CHART TYPES:
     • **bar**: Bar charts for categorical comparisons
-      - Grouped bars for multi-series data
-      - Stacked bars for part-to-whole relationships
+      - Grouped bars for multi-series data (use color_column with chart_style='grouped')
+      - Stacked bars for part-to-whole relationships (use color_column with chart_style='stacked')
+      - ⚠️ y_column must contain numeric values
     • **line**: Line charts for trends over time
-      - Multi-series support with color coding
+      - Single measure with optional color grouping
+      - Multiple measures for comparison (pass y_column as list of column names)
       - Automatic time series detection
+      - ⚠️ y_column(s) must contain numeric values
     • **scatter**: Scatter plots for correlations
       - Color coding by category
-      - Size variations for additional dimensions
+      - ⚠️ Both x_column and y_column must contain numeric values
     • **heatmap**: Heat maps for matrix data
       - Correlation matrices
       - Pivot table visualizations
@@ -1379,11 +1382,18 @@ async def generate_chart(
                     Typically the 'data' field from execute_sql_query results.
         chart_type: Type of chart - 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis (required)
-        y_column: Column name for Y-axis (optional for heatmaps)
+        y_column: Column name(s) for Y-axis. Can be:
+                  - String: single measure (all chart types)
+                  - List of strings: multiple measures (line charts only - creates multi-line comparison)
+                  ⚠️ IMPORTANT: Measure columns must contain numeric values (integers or floats)
         color_column: Column for color grouping/legend (optional)
+                     - For bar charts: creates grouped or stacked bars based on chart_style
+                     - For line/scatter: creates separate series with different colors
         title: Chart title (auto-generated if not provided)
         chart_library: 'matplotlib' or 'plotly' (default: matplotlib)
         chart_style: 'grouped' or 'stacked' for bar charts (default: grouped)
+                    - 'grouped': bars side-by-side for comparison
+                    - 'stacked': bars stacked on top of each other (requires color_column)
         width: Chart width in pixels (default: 800)
         height: Chart height in pixels (default: 600)
 
@@ -1395,11 +1405,24 @@ async def generate_chart(
         result = execute_sql_query("SELECT category, SUM(sales) as total FROM orders GROUP BY category")
         generate_chart(result['data'], 'bar', 'category', 'total')
 
-        # 2. Time series line chart
+        # 2. Stacked bar chart with two dimensions
+        result = execute_sql_query(\"\"\"
+            SELECT region, product_type, SUM(revenue) as total
+            FROM sales
+            GROUP BY region, product_type
+        \"\"\")
+        generate_chart(result['data'], 'bar', 'region', 'total', 'product_type', chart_style='stacked')
+
+        # 3. Time series line chart with single measure
         result = execute_sql_query("SELECT date, revenue FROM daily_sales ORDER BY date")
         generate_chart(result['data'], 'line', 'date', 'revenue', title='Revenue Trend')
 
-        # 3. Multi-series grouped bar chart
+        # 4. Multi-measure line chart for comparison (NEW!)
+        result = execute_sql_query("SELECT month, revenue, expenses, profit FROM monthly_data ORDER BY month")
+        generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'],
+                      title='Financial Metrics Comparison')
+
+        # 5. Grouped bar chart
         result = execute_sql_query(\"\"\"
             SELECT region, product, SUM(quantity) as units
             FROM sales
@@ -1407,11 +1430,11 @@ async def generate_chart(
         \"\"\")
         generate_chart(result['data'], 'bar', 'region', 'units', 'product', chart_style='grouped')
 
-        # 4. Correlation heatmap
+        # 6. Correlation heatmap
         result = execute_sql_query("SELECT * FROM metrics")
         generate_chart(result['data'], 'heatmap', x_column='metric1')
 
-        # 5. Scatter plot with categories
+        # 7. Scatter plot with categories
         result = execute_sql_query("SELECT price, quality, brand FROM products")
         generate_chart(result['data'], 'scatter', 'price', 'quality', 'brand')
 
