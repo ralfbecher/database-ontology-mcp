@@ -464,17 +464,24 @@ GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 
 #### 8. `generate_chart`
 
-Generate interactive charts from SQL query results.
+Generate interactive charts from SQL query results with support for stacked bar charts and multi-measure line charts.
 
 **Parameters:**
 - `data_source` (required): List of dictionaries (typically from `execute_sql_query`)
 - `chart_type` (required): 'bar', 'line', 'scatter', or 'heatmap'
 - `x_column` (required): Column name for X-axis
-- `y_column` (optional): Column name for Y-axis
+- `y_column` (optional): Column name(s) for Y-axis
+  - **String**: Single measure (all chart types)
+  - **List of strings**: Multiple measures (line charts only - creates multi-line comparison)
+  - ⚠️ **IMPORTANT**: Must contain numeric values (integers or floats)
 - `color_column` (optional): Column for color grouping
+  - For bar charts: creates grouped or stacked bars based on `chart_style`
+  - For line/scatter: creates separate series with different colors
 - `title` (optional): Chart title (auto-generated if not provided)
 - `chart_library` (optional): 'matplotlib' or 'plotly' (default: matplotlib)
 - `chart_style` (optional): 'grouped' or 'stacked' for bar charts
+  - 'grouped': Bars side-by-side for comparison
+  - 'stacked': Bars stacked on top (requires `color_column` for two dimensions)
 - `width` (optional): Chart width in pixels (default: 800)
 - `height` (optional): Chart height in pixels (default: 600)
 
@@ -482,7 +489,24 @@ Generate interactive charts from SQL query results.
 
 **Output:** Chart saved to `tmp/chart_{timestamp}.png`
 
-**Key Feature:** Direct image rendering without base64 encoding for better performance
+**Key Features:**
+- **Stacked bar charts** with two dimensions for part-to-whole relationships
+- **Multi-measure line charts** for comparing multiple metrics on the same chart
+- Direct image rendering without base64 encoding for better performance
+
+**Examples:**
+```python
+# Stacked bar chart
+result = execute_sql_query("""
+    SELECT region, product_type, SUM(revenue) as total
+    FROM sales GROUP BY region, product_type
+""")
+generate_chart(result['data'], 'bar', 'region', 'total', 'product_type', chart_style='stacked')
+
+# Multi-measure line chart comparison
+result = execute_sql_query("SELECT month, revenue, expenses, profit FROM monthly_data ORDER BY month")
+generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'])
+```
 
 #### 9. `get_server_info`
 
@@ -694,7 +718,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Replaced deprecated resource decorators
 - Fixed resource API deprecation warnings
 
-**Chart Generation Simplification** (Oct 2025):
+**Chart Generation Enhancement** (Oct 2025):
+- **Stacked bar charts** with two dimensions (x_column + color_column)
+- **Multi-measure line charts** for comparing multiple metrics (y_column accepts list)
 - Return Image objects directly instead of resource URIs
 - Removed in-memory image store complexity
 - Simplified error handling with exceptions
