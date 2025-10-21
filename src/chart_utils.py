@@ -26,15 +26,27 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     if chart_type == "bar":
         if chart_style == "stacked" and color_column:
             # Stacked bar chart with two dimensions: x_column (categories) and color_column (stack groups)
-            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title,
-                        barmode='stack')
+            # Aggregate data first to handle duplicates
+            agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
+            # Sort by sum of stacked values (descending)
+            total_by_category = agg_df.groupby(x_column)[y_column].sum().sort_values(ascending=False)
+            category_order = total_by_category.index.tolist()
+            fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column, title=title,
+                        barmode='stack', category_orders={x_column: category_order})
         elif color_column:
-            # Grouped bar chart
-            fig = px.bar(df, x=x_column, y=y_column, color=color_column, title=title,
-                        barmode='group')
+            # Grouped bar chart - aggregate data first to handle duplicates
+            agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
+            # Sort by sum of grouped values (descending)
+            total_by_category = agg_df.groupby(x_column)[y_column].sum().sort_values(ascending=False)
+            category_order = total_by_category.index.tolist()
+            fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column, title=title,
+                        barmode='group', category_orders={x_column: category_order})
+            # Make bars wider for grouped charts
+            fig.update_layout(bargap=0.15, bargroupgap=0.05)
         else:
-            # Simple bar chart
-            fig = px.bar(df, x=x_column, y=y_column, title=title)
+            # Simple bar chart - sort by measure value (descending)
+            sorted_df = df.sort_values(by=y_column, ascending=False)
+            fig = px.bar(sorted_df, x=x_column, y=y_column, title=title)
     elif chart_type == "line":
         # Support multiple measures for line charts
         if isinstance(y_column, list):
@@ -92,12 +104,22 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             fig.update_xaxes(tickangle=45)
     
     # Apply consistent styling
+    # Determine if we should show legend
+    show_legend = color_column or (chart_type == "line" and isinstance(y_column, list))
+
     fig.update_layout(
         font=dict(size=12),
         plot_bgcolor='white',
         paper_bgcolor='white',
-        margin=dict(b=100, t=60, l=60, r=60),  # Add margins for labels
-        showlegend=True if color_column else False,
+        margin=dict(b=100, t=60, l=60, r=200),  # Extra right margin for legend
+        showlegend=show_legend,
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.02  # Position legend just outside the plot area on the right
+        ),
         width=width,
         height=height
     )
@@ -120,14 +142,25 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
     if chart_type == "bar":
         if color_column and chart_style == "stacked":
             # Stacked bar chart with two dimensions: x_column and color_column
-            pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, fill_value=0)
+            # Sort by sum of stacked values (descending)
+            pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, aggfunc='sum', fill_value=0)
+            total_by_category = pivot_df.sum(axis=1).sort_values(ascending=False)
+            pivot_df = pivot_df.loc[total_by_category.index]
             pivot_df.plot(kind='bar', stacked=True, ax=ax)
         elif color_column:
-            # Grouped bar chart
-            sns.barplot(data=df, x=x_column, y=y_column, hue=color_column, ax=ax)
+            # Grouped bar chart - use pivot table to handle multiple rows per x/hue combination
+            # This aggregates (sums) values when there are duplicates
+            pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, aggfunc='sum', fill_value=0)
+            # Sort by total across all groups (descending)
+            total_by_category = pivot_df.sum(axis=1).sort_values(ascending=False)
+            pivot_df = pivot_df.loc[total_by_category.index]
+            # Make bars 2-3x wider for grouped charts (width closer to 1.0 = wider)
+            pivot_df.plot(kind='bar', ax=ax, width=0.85)
         else:
-            # Simple bar chart
-            sns.barplot(data=df, x=x_column, y=y_column, ax=ax)
+            # Simple bar chart - sort by measure value (descending)
+            sorted_df = df.sort_values(by=y_column, ascending=False)
+            category_order = sorted_df[x_column].tolist()
+            sns.barplot(data=sorted_df, x=x_column, y=y_column, ax=ax, order=category_order, estimator='sum', errorbar=None)
     elif chart_type == "line":
         # Support multiple measures for line charts
         if isinstance(y_column, list):
@@ -136,14 +169,14 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
                 if measure not in df.columns:
                     continue
                 ax.plot(df[x_column], df[measure], label=measure, marker='o')
-            ax.legend()
+            ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
             ax.set_ylabel("Value")
         elif color_column:
             # Single measure with color grouping
             for group in df[color_column].unique():
                 group_data = df[df[color_column] == group]
                 ax.plot(group_data[x_column], group_data[y_column], label=group, marker='o')
-            ax.legend()
+            ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
         else:
             # Simple line chart
             ax.plot(df[x_column], df[y_column], marker='o')
@@ -172,7 +205,12 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
     ax.set_xlabel(x_column)
     if y_column:
         ax.set_ylabel(y_column)
-    
+
+    # Position any legend outside the plot area on the right
+    legend = ax.get_legend()
+    if legend is not None:
+        ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
+
     plt.tight_layout()
     return fig
 

@@ -147,7 +147,7 @@ This server transforms raw database schemas into **semantic ontologies** that pr
 2. list_schemas()
 3. sample_table_data(table_name="customers", limit=10)
    → Quick data preview without full schema analysis
-4. execute_sql_query(sql_query="SELECT COUNT(*) FROM customers")
+4. execute_sql_query(sql_query="SELECT COUNT(*) FROM public.customers")
 ```
 
 ### Workflow 3: SQL Validation → Execution → Visualization
@@ -156,7 +156,7 @@ This server transforms raw database schemas into **semantic ontologies** that pr
 
 **Tool Chain:**
 ```
-1. validate_sql_syntax(sql_query="SELECT category, SUM(sales) FROM orders GROUP BY category")
+1. validate_sql_syntax(sql_query="SELECT public.orders.category, SUM(public.orders.sales) FROM public.orders GROUP BY public.orders.category")
    → Syntax checking, security validation, performance analysis
    → Returns: is_valid, warnings, suggestions, security_analysis
 
@@ -191,11 +191,11 @@ This server transforms raw database schemas into **semantic ontologies** that pr
 
 3. Use UNION ALL pattern (recommended):
    WITH unified_facts AS (
-       SELECT ... FROM order_items
+       SELECT ... FROM public.order_items
        UNION ALL
-       SELECT ... FROM shipments
+       SELECT ... FROM public.shipments
    )
-   SELECT ... GROUP BY ...
+   SELECT ... FROM unified_facts GROUP BY ...
 
 4. execute_sql_query(sql_query="...")
    → Execute fan-trap-safe query
@@ -209,8 +209,8 @@ When a parent table has multiple 1:many relationships and you JOIN them with agg
 orders (1) → order_items (many)
 orders (1) → shipments (many)
 
-❌ WRONG: SELECT SUM(order_items.amount) FROM orders
-          JOIN order_items ... JOIN shipments ...
+❌ WRONG: SELECT SUM(public.order_items.amount) FROM public.orders
+          JOIN public.order_items ... JOIN public.shipments ...
           Result: Inflated totals due to Cartesian product
 
 ✅ RIGHT: Use UNION ALL to combine facts, then aggregate
@@ -248,7 +248,7 @@ orders (1) → shipments (many)
 :hasOrder a owl:ObjectProperty ;
     rdfs:domain :Customer ;
     rdfs:range :Order ;
-    db:joinCondition "customers.customer_id = orders.customer_id" .  # JOIN hint
+    db:joinCondition "public.customers.customer_id = public.orders.customer_id" .  # JOIN hint
 ```
 
 **This enables:**
@@ -283,7 +283,7 @@ orders (1) → shipments (many)
 1. connect_database(db_type="postgresql")
 2. analyze_schema(schema_name="public")
 3. generate_ontology(schema_name="public")
-4. execute_sql_query(sql_query="SELECT * FROM customers LIMIT 10")
+4. execute_sql_query(sql_query="SELECT * FROM public.customers LIMIT 10")
 ```
 
 **Full Analytical Workflow:**
@@ -545,6 +545,11 @@ async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None)
     - Understanding table dependencies for proper JOIN ordering
     - Detecting potential Cartesian product multiplications
     - Planning UNION ALL strategies for multiple fact tables
+
+    IMPORTANT: This tool identifies schema relationships. When relationships include
+    1:many patterns (e.g., sales → shipments), multi-fact queries MUST use UNION_ALL
+    pattern to avoid data multiplication. See execute_sql_query() documentation for
+    safe patterns.
     
     Args:
         schema_name: Name of the schema to analyze (optional)
@@ -874,26 +879,26 @@ async def validate_sql_syntax(sql_query: str, ctx: Context = None) -> Dict[str, 
     
     Example Usage:
         # Validate a simple query
-        validate_sql_syntax("SELECT * FROM customers WHERE age > 25")
-        
+        validate_sql_syntax("SELECT * FROM public.customers WHERE public.customers.age > 25")
+
         # Validate a complex analytical query
         validate_sql_syntax(\"\"\"
             WITH monthly_sales AS (
-                SELECT 
-                    DATE_TRUNC('month', order_date) as month,
-                    SUM(amount) as total_sales
-                FROM orders 
-                WHERE order_date >= '2023-01-01'
-                GROUP BY DATE_TRUNC('month', order_date)
+                SELECT
+                    DATE_TRUNC('month', public.orders.order_date) as month,
+                    SUM(public.orders.amount) as total_sales
+                FROM public.orders
+                WHERE public.orders.order_date >= '2023-01-01'
+                GROUP BY DATE_TRUNC('month', public.orders.order_date)
             )
-            SELECT 
-                month,
-                total_sales,
-                LAG(total_sales) OVER (ORDER BY month) as prev_month_sales,
-                ROUND((total_sales - LAG(total_sales) OVER (ORDER BY month)) / 
-                      LAG(total_sales) OVER (ORDER BY month) * 100, 2) as growth_rate
+            SELECT
+                monthly_sales.month,
+                monthly_sales.total_sales,
+                LAG(monthly_sales.total_sales) OVER (ORDER BY monthly_sales.month) as prev_month_sales,
+                ROUND((monthly_sales.total_sales - LAG(monthly_sales.total_sales) OVER (ORDER BY monthly_sales.month)) /
+                      LAG(monthly_sales.total_sales) OVER (ORDER BY monthly_sales.month) * 100, 2) as growth_rate
             FROM monthly_sales
-            ORDER BY month
+            ORDER BY monthly_sales.month
         \"\"\")
     
     Validation Categories:
@@ -964,38 +969,71 @@ async def validate_sql_syntax(sql_query: str, ctx: Context = None) -> Dict[str, 
 async def execute_sql_query(
     sql_query: str,
     limit: int = 1000,
+    checklist_completed: bool = False,
     ctx: Context = None
 ) -> Dict[str, Any]:
     """Execute a validated SQL query against the connected database with comprehensive safety features.
     
     ## SQL TRAP PREVENTION
 
-    ### PRE-EXECUTION CHECKLIST
+    ### REQUIRED: PRE-EXECUTION CHECKLIST
 
-    **1. RELATIONSHIP ANALYSIS**
-    - Examine foreign_keys from `analyze_schema()` first
-    - Identify 1:many relationships in your query
-    - Note tables appearing on "many" side of multiple relationships
+    You MUST complete these steps before calling this tool:
 
-    **2. FAN-TRAP DETECTION**
+    1. ✓ RELATIONSHIP ANALYSIS - REQUIRED
+        - Call analyze_schema() first
+        - Examine the foreign_keys output
+        - Identify all 1:many relationships
+        - If you detect multiple 1:many relatione in the data model graph of the query, proceed to STEP 2
 
-    **Common problematic patterns:**
-    - Sales + Shipments + SUM() = potential fan-trap
-    - Multiple fact tables with aggregation = high risk
-    - Multiple LEFT JOINs + GROUP BY = review carefully
-    - 3+ table joins with SUM/COUNT/AVG = check for inflation
+    2. ✓ FAN-TRAP DETECTION - REQUIRED
+        - Pattern detected: multiple 1:many + aggregation?
+        - If YES: You MUST use UNION_ALL (see PATTERN 1)
+        - If NO: You may use other patterns
 
-    **Pattern to avoid:**
+    3. ✓ SAFE PATTERN SELECTION - REQUIRED
+        - Multiple fact tables? → Use UNION_ALL
+        - Single fact table? → Use JOIN
+        - Declare your pattern in the function call
+
+    ## IDENTIFIER QUALIFICATION - CRITICAL
+
+    **ALWAYS fully qualify table and column identifiers with schema prefix to avoid ambiguity and errors:**
+
+    ✅ CORRECT:
+    ```sql
+    SELECT
+        public.customers.customer_id,
+        public.customers.name,
+        public.orders.order_date
+    FROM public.customers
+    JOIN public.orders ON public.customers.customer_id = public.orders.customer_id
     ```
-    FROM tableA JOIN tableB JOIN tableC 
-    WHERE tableA→tableB (1:many) AND tableA→tableC (1:many)
-    Result: SUM(tableA.amount) may be artificially inflated
+
+    ❌ WRONG:
+    ```sql
+    SELECT customer_id, name, order_date
+    FROM customers
+    JOIN orders ON customers.customer_id = orders.customer_id
     ```
 
-    **3. VALIDATION**
-    - Use `validate_sql_syntax()` before execution
-    - Review warnings about query complexity
-    - Check for multiple table joins with aggregation
+    **Why this matters:**
+    - Prevents ambiguous column references in JOINs
+    - Avoids schema search path issues across different database systems
+    - Ensures queries work consistently regardless of current schema context
+    - Makes queries more maintainable and self-documenting
+    - Required for cross-schema queries
+
+    **Best practices:**
+    - Use format: `schema_name.table_name.column_name` in SELECT clauses
+    - Use format: `schema_name.table_name` in FROM and JOIN clauses
+    - Qualify ALL identifiers, even when querying a single table
+    - Use table aliases with qualified names for readability:
+      ```sql
+      SELECT c.customer_id, o.order_date
+      FROM public.customers AS c
+      JOIN public.orders AS o ON c.customer_id = o.customer_id
+      ```
 
     ## SAFE QUERY PATTERNS
 
@@ -1006,47 +1044,49 @@ async def execute_sql_query(
     ```sql
     WITH unified_facts AS (
         -- Sales facts
-        SELECT 
-            client_id, 
-            product_id, 
-            sales_amount as amount, 
-            0 as shipment_qty, 
+        SELECT
+            public.sales.client_id,
+            public.sales.product_id,
+            public.sales.sales_amount as amount,
+            0 as shipment_qty,
             0 as return_qty,
             'SALES' as fact_type
-        FROM sales
-        
+        FROM public.sales
+
         UNION ALL
-        
-        -- Shipment facts  
-        SELECT 
-            client_id, 
-            product_id, 
-            0 as amount, 
-            shipment_quantity, 
+
+        -- Shipment facts
+        SELECT
+            public.sales.client_id,
+            public.sales.product_id,
+            0 as amount,
+            public.shipments.shipment_quantity,
             0 as return_qty,
             'SHIPMENT' as fact_type
-        FROM shipments s JOIN sales sal ON s.sales_id = sal.id
-        
+        FROM public.shipments
+        JOIN public.sales ON public.shipments.sales_id = public.sales.id
+
         UNION ALL
-        
+
         -- Return facts
-        SELECT 
-            client_id, 
-            product_id, 
-            0 as amount, 
-            0 as shipment_qty, 
-            return_quantity,
-            'RETURN' as fact_type  
-        FROM returns r JOIN sales sal ON r.sales_id = sal.id
+        SELECT
+            public.sales.client_id,
+            public.sales.product_id,
+            0 as amount,
+            0 as shipment_qty,
+            public.returns.return_quantity,
+            'RETURN' as fact_type
+        FROM public.returns
+        JOIN public.sales ON public.returns.sales_id = public.sales.id
     )
-    SELECT 
-        client_id,
-        product_id,
-        SUM(amount) as total_sales,
-        SUM(shipment_qty) as total_shipped,
-        SUM(return_qty) as total_returned
-    FROM unified_facts 
-    GROUP BY client_id, product_id;
+    SELECT
+        unified_facts.client_id,
+        unified_facts.product_id,
+        SUM(unified_facts.amount) as total_sales,
+        SUM(unified_facts.shipment_qty) as total_shipped,
+        SUM(unified_facts.return_qty) as total_returned
+    FROM unified_facts
+    GROUP BY unified_facts.client_id, unified_facts.product_id;
     ```
 
     **Advantages:**
@@ -1062,18 +1102,24 @@ async def execute_sql_query(
 
     ```sql
     WITH fact1_totals AS (
-        SELECT key, SUM(amount) as total_amount 
-        FROM fact1 GROUP BY key
+        SELECT
+            public.fact1.key,
+            SUM(public.fact1.amount) as total_amount
+        FROM public.fact1
+        GROUP BY public.fact1.key
     ),
     fact2_totals AS (
-        SELECT key, SUM(quantity) as total_quantity 
-        FROM fact2 GROUP BY key
+        SELECT
+            public.fact2.key,
+            SUM(public.fact2.quantity) as total_quantity
+        FROM public.fact2
+        GROUP BY public.fact2.key
     )
-    SELECT 
-        f1.key, 
+    SELECT
+        f1.key,
         f1.total_amount,
         COALESCE(f2.total_quantity, 0) as total_quantity
-    FROM fact1_totals f1 
+    FROM fact1_totals f1
     LEFT JOIN fact2_totals f2 ON f1.key = f2.key;
     ```
 
@@ -1082,13 +1128,13 @@ async def execute_sql_query(
     **Warning:** Only use when you fully understand the data relationships
 
     ```sql
-    SELECT 
-        key, 
-        SUM(DISTINCT fact1.amount) as total_amount,
-        SUM(fact2.quantity) as total_quantity 
-    FROM fact1 
-    LEFT JOIN fact2 ON fact1.id = fact2.fact1_id 
-    GROUP BY key;
+    SELECT
+        public.fact1.key,
+        SUM(DISTINCT public.fact1.amount) as total_amount,
+        SUM(public.fact2.quantity) as total_quantity
+    FROM public.fact1
+    LEFT JOIN public.fact2 ON public.fact1.id = public.fact2.fact1_id
+    GROUP BY public.fact1.key;
     ```
 
     ### PATTERN 4 - WINDOW FUNCTIONS
@@ -1096,31 +1142,34 @@ async def execute_sql_query(
     **For:** Complex analytical queries with preserved granularity
 
     ```sql
-    SELECT DISTINCT 
-        key, 
-        SUM(amount) OVER (PARTITION BY key) as total_amount,
-        pre_aggregated_quantity
-    FROM fact1 
+    SELECT DISTINCT
+        public.fact1.key,
+        SUM(public.fact1.amount) OVER (PARTITION BY public.fact1.key) as total_amount,
+        f2.pre_aggregated_quantity
+    FROM public.fact1
     LEFT JOIN (
-        SELECT key, SUM(qty) as pre_aggregated_quantity 
-        FROM fact2 GROUP BY key
-    ) f2 USING(key);
+        SELECT
+            public.fact2.key,
+            SUM(public.fact2.qty) as pre_aggregated_quantity
+        FROM public.fact2
+        GROUP BY public.fact2.key
+    ) f2 ON public.fact1.key = f2.key;
     ```
 
     ## RESULT VALIDATION
 
     **Verify results make business sense:**
     - Compare totals with business expectations
-    - Cross-check: `SELECT SUM(amount) FROM base_table` vs your query result
+    - Cross-check: `SELECT SUM(public.base_table.amount) FROM public.base_table` vs your query result
     - Ensure row counts are reasonable
     - High results may indicate fan-trap multiplication
 
     ## COMMON PROBLEMATIC COMBINATIONS
 
     **Patterns requiring careful review:**
-    - `sales LEFT JOIN shipments + SUM(sales.amount)`
-    - `orders LEFT JOIN order_items LEFT JOIN products + SUM(orders.total)`
-    - `customers LEFT JOIN transactions LEFT JOIN transaction_items + aggregation`
+    - `public.sales LEFT JOIN public.shipments + SUM(public.sales.amount)`
+    - `public.orders LEFT JOIN public.order_items LEFT JOIN public.products + SUM(public.orders.total)`
+    - `public.customers LEFT JOIN public.transactions LEFT JOIN public.transaction_items + aggregation`
     - Queries joining parent→child1 + parent→child2 with SUM/COUNT
 
     ## RELATIONSHIP EXAMPLES
@@ -1233,22 +1282,22 @@ async def execute_sql_query(
     
     Example Usage:
         # Simple data retrieval
-        execute_sql_query("SELECT * FROM customers WHERE country = 'USA'", 100)
-        
+        execute_sql_query("SELECT * FROM public.customers WHERE public.customers.country = 'USA'", 100)
+
         # Complex analytical query
         execute_sql_query(\"\"\"
-            SELECT 
-                category,
+            SELECT
+                public.products.category,
                 COUNT(*) as product_count,
-                AVG(price) as avg_price,
-                SUM(revenue) as total_revenue
-            FROM products p
-            JOIN sales s ON p.id = s.product_id
+                AVG(public.products.price) as avg_price,
+                SUM(public.sales.revenue) as total_revenue
+            FROM public.products p
+            JOIN public.sales s ON p.id = s.product_id
             WHERE s.date >= '2023-01-01'
-            GROUP BY category
+            GROUP BY public.products.category
             ORDER BY total_revenue DESC
         \"\"\", 500)
-        
+
         # Schema introspection
         execute_sql_query("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public'")
     
@@ -1291,7 +1340,15 @@ async def execute_sql_query(
                 "parameter_error",
                 "Provide a valid SELECT statement or schema introspection query."
             )
-        
+
+        # Validate checklist_completed parameter
+        if not checklist_completed:
+            return create_error_response(
+                "ERROR: PRE-EXECUTION CHECKLIST NOT COMPLETED.\nSee tool description for required steps.",
+                "validation_error",
+                "You must complete the pre-execution checklist before executing SQL queries. Review the tool documentation for required steps."
+            )
+
         # Execute the query through the database manager
         result = db_manager.execute_sql_query(sql_query.strip(), limit)
 
@@ -1402,40 +1459,46 @@ async def generate_chart(
 
     Example Usage:
         # 1. Simple bar chart from query results
-        result = execute_sql_query("SELECT category, SUM(sales) as total FROM orders GROUP BY category")
+        result = execute_sql_query("SELECT public.orders.category, SUM(public.orders.sales) as total FROM public.orders GROUP BY public.orders.category")
         generate_chart(result['data'], 'bar', 'category', 'total')
 
         # 2. Stacked bar chart with two dimensions
         result = execute_sql_query(\"\"\"
-            SELECT region, product_type, SUM(revenue) as total
-            FROM sales
-            GROUP BY region, product_type
+            SELECT
+                public.sales.region,
+                public.sales.product_type,
+                SUM(public.sales.revenue) as total
+            FROM public.sales
+            GROUP BY public.sales.region, public.sales.product_type
         \"\"\")
         generate_chart(result['data'], 'bar', 'region', 'total', 'product_type', chart_style='stacked')
 
         # 3. Time series line chart with single measure
-        result = execute_sql_query("SELECT date, revenue FROM daily_sales ORDER BY date")
+        result = execute_sql_query("SELECT public.daily_sales.date, public.daily_sales.revenue FROM public.daily_sales ORDER BY public.daily_sales.date")
         generate_chart(result['data'], 'line', 'date', 'revenue', title='Revenue Trend')
 
         # 4. Multi-measure line chart for comparison (NEW!)
-        result = execute_sql_query("SELECT month, revenue, expenses, profit FROM monthly_data ORDER BY month")
+        result = execute_sql_query("SELECT public.monthly_data.month, public.monthly_data.revenue, public.monthly_data.expenses, public.monthly_data.profit FROM public.monthly_data ORDER BY public.monthly_data.month")
         generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'],
                       title='Financial Metrics Comparison')
 
         # 5. Grouped bar chart
         result = execute_sql_query(\"\"\"
-            SELECT region, product, SUM(quantity) as units
-            FROM sales
-            GROUP BY region, product
+            SELECT
+                public.sales.region,
+                public.sales.product,
+                SUM(public.sales.quantity) as units
+            FROM public.sales
+            GROUP BY public.sales.region, public.sales.product
         \"\"\")
         generate_chart(result['data'], 'bar', 'region', 'units', 'product', chart_style='grouped')
 
         # 6. Correlation heatmap
-        result = execute_sql_query("SELECT * FROM metrics")
+        result = execute_sql_query("SELECT * FROM public.metrics")
         generate_chart(result['data'], 'heatmap', x_column='metric1')
 
         # 7. Scatter plot with categories
-        result = execute_sql_query("SELECT price, quality, brand FROM products")
+        result = execute_sql_query("SELECT public.products.price, public.products.quality, public.products.brand FROM public.products")
         generate_chart(result['data'], 'scatter', 'price', 'quality', 'brand')
 
     STYLING NOTES:
@@ -1457,10 +1520,10 @@ async def generate_chart(
     - Fallback from Plotly to Matplotlib if dependencies missing
     """
     # Import the implementation from tools module
-    from .tools.chart import generate_chart_bytes
+    from .tools.chart import generate_chart as generate_chart_impl
 
     # Call the implementation to get image bytes and chart_id
-    result = generate_chart_bytes(
+    result = generate_chart_impl(
         data_source, chart_type, x_column, y_column, color_column,
         title, chart_library, chart_style, width, height
     )

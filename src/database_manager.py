@@ -1,6 +1,7 @@
 """Database connection and schema analysis manager."""
 
 import asyncio
+import decimal
 import hashlib
 import logging
 import re
@@ -1075,7 +1076,9 @@ class DatabaseManager:
                                 for i, value in enumerate(row):
                                     column_name = sample_columns[i]
                                     if value is not None:
-                                        if hasattr(value, 'isoformat'):  # datetime objects
+                                        if isinstance(value, decimal.Decimal):  # decimal/numeric types
+                                            row_dict[column_name] = float(value)
+                                        elif hasattr(value, 'isoformat'):  # datetime objects
                                             row_dict[column_name] = value.isoformat()
                                         elif isinstance(value, (bytes, bytearray)):
                                             row_dict[column_name] = value.hex()
@@ -1276,7 +1279,9 @@ class DatabaseManager:
                         # Convert non-serializable types to strings
                         column_name = columns[i]
                         if value is not None:
-                            if hasattr(value, 'isoformat'):  # datetime objects
+                            if isinstance(value, decimal.Decimal):  # decimal/numeric types
+                                row_dict[column_name] = float(value)
+                            elif hasattr(value, 'isoformat'):  # datetime objects
                                 row_dict[column_name] = value.isoformat()
                             elif isinstance(value, (bytes, bytearray)):
                                 # Convert binary data to hex string
@@ -1582,7 +1587,9 @@ class DatabaseManager:
                             column_name = result_data["columns"][i]
                             # Serialize complex data types
                             if value is not None:
-                                if hasattr(value, 'isoformat'):  # datetime/date objects
+                                if isinstance(value, decimal.Decimal):  # decimal/numeric types
+                                    row_dict[column_name] = float(value)
+                                elif hasattr(value, 'isoformat'):  # datetime/date objects
                                     row_dict[column_name] = value.isoformat()
                                 elif isinstance(value, (bytes, bytearray)):  # binary data
                                     row_dict[column_name] = f"<binary:{len(value)} bytes>"

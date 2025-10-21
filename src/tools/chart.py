@@ -9,7 +9,7 @@ from ..chart_utils import create_plotly_chart, create_matplotlib_chart, save_ima
 logger = logging.getLogger(__name__)
 
 
-def generate_chart_bytes(
+def generate_chart(
     data_source: List[Dict[str, Any]],
     chart_type: str,
     x_column: str,

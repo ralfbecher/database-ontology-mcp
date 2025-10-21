@@ -33,8 +33,9 @@ def validate_sql_syntax(sql_query: str) -> Dict[str, Any]:
 
 
 def execute_sql_query(
-    sql_query: str, 
-    limit: int = 1000
+    sql_query: str,
+    limit: int = 1000,
+    checklist_completed: bool = False
 ) -> Dict[str, Any]:
     """Execute SQL query implementation. Full documentation in main.py."""
     try:
