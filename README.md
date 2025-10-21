@@ -178,13 +178,19 @@ database-ontology-mcp/
 │   ├── main.py                     # FastMCP server entry point (9 tools)
 │   ├── database_manager.py         # Database connection and analysis
 │   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
+│   ├── dremio_client.py            # Dremio database client
 │   ├── security.py                 # Security and validation utilities
 │   ├── chart_utils.py              # Chart generation utilities
 │   ├── config.py                   # Configuration management with .env support
 │   ├── constants.py                # Application constants and settings
-│   ├── utils.py                    # Utility functions
+│   ├── shared.py                   # Shared utilities and helpers
 │   └── tools/                      # Tool implementations
+│       ├── __init__.py             # Tools package initialization
 │       ├── chart.py                # Chart generation tool
+│       ├── connection.py           # Database connection tools
+│       ├── info.py                 # Server info tool
+│       ├── ontology.py             # Ontology generation tool
+│       ├── query.py                # SQL query execution tool
 │       └── schema.py               # Schema analysis tools
 ├── tests/                          # Test suite
 ├── tmp/                            # Generated files (ontologies, charts)
@@ -299,7 +305,7 @@ Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
   "mcpServers": {
     "database-ontology": {
       "command": "python",
-      "args": ["/absolute/path/to/database-ontology-mcp/run_server.py"]
+      "args": ["/absolute/path/to/database-ontology-mcp/server.py"]
     }
   }
 }
