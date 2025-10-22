@@ -19,7 +19,9 @@ def generate_chart(
     chart_library: str = "matplotlib",
     chart_style: str = "grouped",
     width: int = 800,
-    height: int = 600
+    height: int = 600,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None
 ) -> Union[Tuple[bytes, str], Dict[str, str]]:
     """Generate chart and return image bytes and chart_id for MCP resources.
 
@@ -36,6 +38,11 @@ def generate_chart(
         chart_style: "grouped" or "stacked" (for bar charts)
         width: Chart width in pixels
         height: Chart height in pixels
+        sort_by: Column to sort by. If None, uses automatic sorting based on chart type:
+            - Bar/grouped/stacked: sorts by measure (y_column) descending
+            - Line: sorts by dimension (x_column) ascending
+            - Heatmap: sorts x_column ascending, y_column descending
+        sort_order: 'ascending' or 'descending'. If None, uses automatic order based on chart type.
 
     Returns:
         Tuple of (image_bytes, chart_id) on success
@@ -127,7 +134,7 @@ def generate_chart(
 
         if chart_library == "plotly":
             try:
-                fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
+                fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
                 # Try to export as PNG
                 try:
                     image_bytes = fig.to_image(format='png', width=width, height=height, scale=2)
@@ -142,7 +149,7 @@ def generate_chart(
                 chart_library = "matplotlib"
 
         if chart_library == "matplotlib":
-            fig = create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height)
+            fig = create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
             # Generate PNG bytes with optimized settings
             import io
             img_buffer = io.BytesIO()

@@ -1066,6 +1066,9 @@ async def execute_sql_query(
 
     ### PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
 
+        - Always use UNION ALL for multi-fact table queries to prevent fan-traps
+        - Prefer UNION approach over complex JOINs for dimensional analysis
+
     **Best for:** Multiple fact tables (sales, shipments, returns, etc.)
 
     ```sql
@@ -1125,7 +1128,7 @@ async def execute_sql_query(
 
     ### PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
 
-    **Use when:** UNION approach is not suitable
+    **Use when:** UNION approach is not suitable or not needed (single fact)
 
     ```sql
     WITH fact1_totals AS (
@@ -1418,6 +1421,8 @@ async def generate_chart(
     chart_style: str = "grouped",
     width: int = 800,
     height: int = 600,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
     ctx: Context = None
 ) -> Image:
     """Generate interactive charts from SQL query results or data analysis.
@@ -1431,17 +1436,20 @@ async def generate_chart(
       - Grouped bars for multi-series data (use color_column with chart_style='grouped')
       - Stacked bars for part-to-whole relationships (use color_column with chart_style='stacked')
       - ⚠️ y_column must contain numeric values
+      - Default sorting: by measure (y_column) descending
     • **line**: Line charts for trends over time
       - Single measure with optional color grouping
       - Multiple measures for comparison (pass y_column as list of column names)
       - Automatic time series detection
       - ⚠️ y_column(s) must contain numeric values
+      - Default sorting: by dimension (x_column) ascending
     • **scatter**: Scatter plots for correlations
       - Color coding by category
       - ⚠️ Both x_column and y_column must contain numeric values
     • **heatmap**: Heat maps for matrix data
       - Correlation matrices
       - Pivot table visualizations
+      - Default sorting: x_column ascending, y_column descending
 
     LIBRARIES:
     • **matplotlib** (default): Static PNG charts
@@ -1480,6 +1488,11 @@ async def generate_chart(
                     - 'stacked': bars stacked on top of each other (requires color_column)
         width: Chart width in pixels (default: 800)
         height: Chart height in pixels (default: 600)
+        sort_by: Column to sort by (optional). If not specified, uses automatic sorting:
+                 - Bar/grouped/stacked: sorts by measure (y_column) descending
+                 - Line: sorts by dimension (x_column) ascending
+                 - Heatmap: sorts x_column ascending, y_column descending
+        sort_order: 'ascending' or 'descending' (optional). If not specified, uses automatic order based on chart type.
 
     Returns:
         Image object that can be displayed in Claude Desktop
@@ -1552,7 +1565,7 @@ async def generate_chart(
     # Call the implementation to get image bytes and chart_id
     result = generate_chart_impl(
         data_source, chart_type, x_column, y_column, color_column,
-        title, chart_library, chart_style, width, height
+        title, chart_library, chart_style, width, height, sort_by, sort_order
     )
 
     # Check if chart generation was successful

@@ -13,43 +13,72 @@ logger = logging.getLogger(__name__)
 TMP_DIR = Path(__file__).parent.parent / "tmp"
 
 
-def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width=800, height=600):
+def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width=800, height=600, sort_by=None, sort_order=None):
     """Create Plotly chart based on type.
 
     Args:
         y_column: Can be a string (single measure) or list of strings (multiple measures for line charts)
+        sort_by: Column to sort by. If None, uses automatic sorting based on chart type:
+            - Bar/grouped/stacked: sorts by measure (y_column) descending
+            - Line: sorts by dimension (x_column) ascending
+            - Heatmap: sorts x_column ascending, y_column descending
+        sort_order: 'ascending' or 'descending'. If None, uses automatic order based on chart type.
     """
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
 
     if chart_type == "bar":
+        # Determine sorting for bar charts
+        # Default: sort by measure (y_column) descending
+        effective_sort_by = sort_by if sort_by else y_column
+        effective_sort_order = sort_order if sort_order else 'descending'
+        sort_ascending = (effective_sort_order == 'ascending')
+
         if chart_style == "stacked" and color_column:
             # Stacked bar chart with two dimensions: x_column (categories) and color_column (stack groups)
             # Aggregate data first to handle duplicates
             agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
-            # Sort by sum of stacked values (descending)
-            total_by_category = agg_df.groupby(x_column)[y_column].sum().sort_values(ascending=False)
+            # Sort by aggregated measure (default) or specified column
+            if effective_sort_by == y_column:
+                total_by_category = agg_df.groupby(x_column)[y_column].sum().sort_values(ascending=sort_ascending)
+            else:
+                # Sort by x_column or another column
+                total_by_category = agg_df.groupby(x_column)[effective_sort_by].sum().sort_values(ascending=sort_ascending)
             category_order = total_by_category.index.tolist()
             fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column, title=title,
                         barmode='stack', category_orders={x_column: category_order})
         elif color_column:
             # Grouped bar chart - aggregate data first to handle duplicates
             agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
-            # Sort by sum of grouped values (descending)
-            total_by_category = agg_df.groupby(x_column)[y_column].sum().sort_values(ascending=False)
+            # Sort by aggregated measure (default) or specified column
+            if effective_sort_by == y_column:
+                total_by_category = agg_df.groupby(x_column)[y_column].sum().sort_values(ascending=sort_ascending)
+            else:
+                # Sort by x_column or another column
+                total_by_category = agg_df.groupby(x_column)[effective_sort_by].sum().sort_values(ascending=sort_ascending)
             category_order = total_by_category.index.tolist()
             fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column, title=title,
                         barmode='group', category_orders={x_column: category_order})
             # Make bars wider for grouped charts
             fig.update_layout(bargap=0.15, bargroupgap=0.05)
         else:
-            # Simple bar chart - sort by measure value (descending)
-            sorted_df = df.sort_values(by=y_column, ascending=False)
-            fig = px.bar(sorted_df, x=x_column, y=y_column, title=title)
+            # Simple bar chart - aggregate first, then sort by measure (default) or specified column
+            agg_df = df.groupby(x_column, as_index=False)[y_column].sum()
+            # Sort by aggregated measure (default) or specified column
+            sorted_df = agg_df.sort_values(by=effective_sort_by, ascending=sort_ascending)
+            category_order = sorted_df[x_column].tolist()
+            fig = px.bar(sorted_df, x=x_column, y=y_column, title=title,
+                        category_orders={x_column: category_order})
     elif chart_type == "line":
         # Work with a copy to avoid modifying the original dataframe
         sorted_df = df.copy()
+
+        # Determine sorting for line charts
+        # Default: sort by dimension (x_column) ascending
+        effective_sort_by = sort_by if sort_by else x_column
+        effective_sort_order = sort_order if sort_order else 'ascending'
+        sort_ascending = (effective_sort_order == 'ascending')
 
         # Try to convert x_column to datetime if it looks like a date
         # This ensures proper chronological sorting
@@ -59,8 +88,8 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             # Not a datetime column, use as-is
             pass
 
-        # Sort data by x-axis column for proper line chart ordering
-        sorted_df = sorted_df.sort_values(by=x_column)
+        # Sort data by x-axis column (default) or specified column for proper line chart ordering
+        sorted_df = sorted_df.sort_values(by=effective_sort_by, ascending=sort_ascending)
 
         # Support multiple measures for line charts
         if isinstance(y_column, list):
@@ -95,11 +124,28 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
         if y_column:
             # Pivot table heatmap
             pivot_df = df.pivot_table(index=x_column, columns=y_column, aggfunc='size', fill_value=0)
+
+            # Sort heatmap: x_column ascending (index), y_column descending (columns)
+            # Default behavior, can be overridden
+            if not sort_by or sort_by == x_column:
+                # Sort index (x_column) - default ascending
+                x_sort_order = sort_order if sort_order else 'ascending'
+                pivot_df = pivot_df.sort_index(ascending=(x_sort_order == 'ascending'))
+
+            # Sort columns (y_column) descending by default
+            if y_column:
+                # For columns, we always want descending unless explicitly overridden
+                pivot_df = pivot_df.sort_index(axis=1, ascending=False)
         else:
             # Correlation heatmap
             numeric_cols = df.select_dtypes(include=['number']).columns
             pivot_df = df[numeric_cols].corr()
-        
+
+            # Sort correlation heatmap indices
+            if sort_order:
+                pivot_df = pivot_df.sort_index(ascending=(sort_order == 'ascending'))
+                pivot_df = pivot_df.sort_index(axis=1, ascending=(sort_order == 'ascending'))
+
         fig = px.imshow(pivot_df, title=title, aspect="auto")
     else:
         raise ValueError(f"Unsupported chart type: {chart_type}")
@@ -139,11 +185,16 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     return fig
 
 
-def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height):
+def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by=None, sort_order=None):
     """Create Matplotlib/Seaborn chart based on type.
 
     Args:
         y_column: Can be a string (single measure) or list of strings (multiple measures for line charts)
+        sort_by: Column to sort by. If None, uses automatic sorting based on chart type:
+            - Bar/grouped/stacked: sorts by measure (y_column) descending
+            - Line: sorts by dimension (x_column) ascending
+            - Heatmap: sorts x_column ascending, y_column descending
+        sort_order: 'ascending' or 'descending'. If None, uses automatic order based on chart type.
     """
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -152,31 +203,55 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
     fig, ax = plt.subplots(figsize=(width/100, height/100))
 
     if chart_type == "bar":
+        # Determine sorting for bar charts
+        # Default: sort by measure (y_column) descending
+        effective_sort_by = sort_by if sort_by else y_column
+        effective_sort_order = sort_order if sort_order else 'descending'
+        sort_ascending = (effective_sort_order == 'ascending')
+
         if color_column and chart_style == "stacked":
             # Stacked bar chart with two dimensions: x_column and color_column
-            # Sort by sum of stacked values (descending)
+            # Sort by aggregated measure (default) or specified column
             pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, aggfunc='sum', fill_value=0)
-            total_by_category = pivot_df.sum(axis=1).sort_values(ascending=False)
+            if effective_sort_by == y_column:
+                total_by_category = pivot_df.sum(axis=1).sort_values(ascending=sort_ascending)
+            else:
+                # If sorting by x_column, sort the index directly
+                total_by_category = pivot_df.sum(axis=1)
+                total_by_category = total_by_category.sort_index(ascending=sort_ascending)
             pivot_df = pivot_df.loc[total_by_category.index]
             pivot_df.plot(kind='bar', stacked=True, ax=ax)
         elif color_column:
             # Grouped bar chart - use pivot table to handle multiple rows per x/hue combination
             # This aggregates (sums) values when there are duplicates
             pivot_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, aggfunc='sum', fill_value=0)
-            # Sort by total across all groups (descending)
-            total_by_category = pivot_df.sum(axis=1).sort_values(ascending=False)
+            # Sort by aggregated measure (default) or specified column
+            if effective_sort_by == y_column:
+                total_by_category = pivot_df.sum(axis=1).sort_values(ascending=sort_ascending)
+            else:
+                # If sorting by x_column, sort the index directly
+                total_by_category = pivot_df.sum(axis=1)
+                total_by_category = total_by_category.sort_index(ascending=sort_ascending)
             pivot_df = pivot_df.loc[total_by_category.index]
             # Make bars 2-3x wider for grouped charts (width closer to 1.0 = wider)
             pivot_df.plot(kind='bar', ax=ax, width=0.85)
         else:
-            # Simple bar chart - sort by measure value (descending)
-            sorted_df = df.sort_values(by=y_column, ascending=False)
+            # Simple bar chart - aggregate first, then sort by measure (default) or specified column
+            agg_df = df.groupby(x_column, as_index=False)[y_column].sum()
+            # Sort by aggregated measure (default) or specified column
+            sorted_df = agg_df.sort_values(by=effective_sort_by, ascending=sort_ascending)
             category_order = sorted_df[x_column].tolist()
             sns.barplot(data=sorted_df, x=x_column, y=y_column, ax=ax, order=category_order, estimator='sum', errorbar=None)
     elif chart_type == "line":
         # Work with a copy to avoid modifying the original dataframe
         import pandas as pd
         sorted_df = df.copy()
+
+        # Determine sorting for line charts
+        # Default: sort by dimension (x_column) ascending
+        effective_sort_by = sort_by if sort_by else x_column
+        effective_sort_order = sort_order if sort_order else 'ascending'
+        sort_ascending = (effective_sort_order == 'ascending')
 
         # Try to convert x_column to datetime if it looks like a date
         # This ensures proper chronological sorting
@@ -186,8 +261,8 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
             # Not a datetime column, use as-is
             pass
 
-        # Sort data by x-axis column for proper line chart ordering
-        sorted_df = sorted_df.sort_values(by=x_column)
+        # Sort data by x-axis column (default) or specified column for proper line chart ordering
+        sorted_df = sorted_df.sort_values(by=effective_sort_by, ascending=sort_ascending)
 
         # Support multiple measures for line charts
         if isinstance(y_column, list):
@@ -212,9 +287,27 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
     elif chart_type == "heatmap":
         if y_column:
             pivot_df = df.pivot_table(index=x_column, columns=y_column, aggfunc='size', fill_value=0)
+
+            # Sort heatmap: x_column ascending (index), y_column descending (columns)
+            # Default behavior, can be overridden
+            if not sort_by or sort_by == x_column:
+                # Sort index (x_column) - default ascending
+                x_sort_order = sort_order if sort_order else 'ascending'
+                pivot_df = pivot_df.sort_index(ascending=(x_sort_order == 'ascending'))
+
+            # Sort columns (y_column) descending by default
+            if y_column:
+                # For columns, we always want descending unless explicitly overridden
+                pivot_df = pivot_df.sort_index(axis=1, ascending=False)
         else:
             numeric_cols = df.select_dtypes(include=['number']).columns
             pivot_df = df[numeric_cols].corr()
+
+            # Sort correlation heatmap indices
+            if sort_order:
+                pivot_df = pivot_df.sort_index(ascending=(sort_order == 'ascending'))
+                pivot_df = pivot_df.sort_index(axis=1, ascending=(sort_order == 'ascending'))
+
         sns.heatmap(pivot_df, annot=True, cmap='viridis', ax=ax)
     
     # Check if x-axis labels are long and need rotation
