@@ -212,7 +212,7 @@ database-ontology-mcp/
 1. **Clone the repository:**
 
 ```bash
-git clone https://github.com/your-org/database-ontology-mcp
+git clone https://github.com/ralfbecher/database-ontology-mcp
 cd database-ontology-mcp
 ```
 
