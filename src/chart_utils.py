@@ -48,16 +48,30 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             sorted_df = df.sort_values(by=y_column, ascending=False)
             fig = px.bar(sorted_df, x=x_column, y=y_column, title=title)
     elif chart_type == "line":
+        # Work with a copy to avoid modifying the original dataframe
+        sorted_df = df.copy()
+
+        # Try to convert x_column to datetime if it looks like a date
+        # This ensures proper chronological sorting
+        try:
+            sorted_df[x_column] = pd.to_datetime(sorted_df[x_column])
+        except (ValueError, TypeError):
+            # Not a datetime column, use as-is
+            pass
+
+        # Sort data by x-axis column for proper line chart ordering
+        sorted_df = sorted_df.sort_values(by=x_column)
+
         # Support multiple measures for line charts
         if isinstance(y_column, list):
             # Multiple measures - create separate line for each measure
             fig = go.Figure()
             for measure in y_column:
-                if measure not in df.columns:
+                if measure not in sorted_df.columns:
                     continue
                 fig.add_trace(go.Scatter(
-                    x=df[x_column],
-                    y=df[measure],
+                    x=sorted_df[x_column],
+                    y=sorted_df[measure],
                     mode='lines+markers',
                     name=measure
                 ))
@@ -69,15 +83,11 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             )
         else:
             # Single measure with optional color grouping
-            fig = px.line(df, x=x_column, y=y_column, color=color_column, title=title)
+            fig = px.line(sorted_df, x=x_column, y=y_column, color=color_column, title=title)
 
         # Enhance for time series
-        if df[x_column].dtype in ['datetime64[ns]', 'object']:
-            try:
-                df[x_column] = pd.to_datetime(df[x_column])
-                fig.update_xaxes(title=x_column, type='date')
-            except:
-                pass
+        if sorted_df[x_column].dtype in ['datetime64[ns]']:
+            fig.update_xaxes(title=x_column, type='date')
     elif chart_type == "scatter":
         fig = px.scatter(df, x=x_column, y=y_column, color=color_column, title=title,
                         size_max=15)
@@ -96,16 +106,18 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     
     # Check if x-axis labels are long and need rotation
     if chart_type in ["bar", "line", "scatter"]:
-        x_labels = df[x_column].astype(str).unique()
+        # Use the appropriate dataframe based on chart type
+        check_df = sorted_df if chart_type == "line" else df
+        x_labels = check_df[x_column].astype(str).unique()
         max_label_length = max([len(str(label)) for label in x_labels]) if len(x_labels) > 0 else 0
-        
+
         if max_label_length > 10 or len(x_labels) > 8:
             # Rotate x-axis labels for better readability
             fig.update_xaxes(tickangle=45)
     
     # Apply consistent styling
     # Determine if we should show legend
-    show_legend = color_column or (chart_type == "line" and isinstance(y_column, list))
+    show_legend = bool(color_column or (chart_type == "line" and isinstance(y_column, list)))
 
     fig.update_layout(
         font=dict(size=12),
@@ -162,24 +174,39 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
             category_order = sorted_df[x_column].tolist()
             sns.barplot(data=sorted_df, x=x_column, y=y_column, ax=ax, order=category_order, estimator='sum', errorbar=None)
     elif chart_type == "line":
+        # Work with a copy to avoid modifying the original dataframe
+        import pandas as pd
+        sorted_df = df.copy()
+
+        # Try to convert x_column to datetime if it looks like a date
+        # This ensures proper chronological sorting
+        try:
+            sorted_df[x_column] = pd.to_datetime(sorted_df[x_column])
+        except (ValueError, TypeError):
+            # Not a datetime column, use as-is
+            pass
+
+        # Sort data by x-axis column for proper line chart ordering
+        sorted_df = sorted_df.sort_values(by=x_column)
+
         # Support multiple measures for line charts
         if isinstance(y_column, list):
             # Multiple measures - create separate line for each measure
             for measure in y_column:
-                if measure not in df.columns:
+                if measure not in sorted_df.columns:
                     continue
-                ax.plot(df[x_column], df[measure], label=measure, marker='o')
+                ax.plot(sorted_df[x_column], sorted_df[measure], label=measure, marker='o')
             ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
             ax.set_ylabel("Value")
         elif color_column:
             # Single measure with color grouping
-            for group in df[color_column].unique():
-                group_data = df[df[color_column] == group]
+            for group in sorted_df[color_column].unique():
+                group_data = sorted_df[sorted_df[color_column] == group]
                 ax.plot(group_data[x_column], group_data[y_column], label=group, marker='o')
             ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
         else:
             # Simple line chart
-            ax.plot(df[x_column], df[y_column], marker='o')
+            ax.plot(sorted_df[x_column], sorted_df[y_column], marker='o')
     elif chart_type == "scatter":
         sns.scatterplot(data=df, x=x_column, y=y_column, hue=color_column, ax=ax, s=60)
     elif chart_type == "heatmap":

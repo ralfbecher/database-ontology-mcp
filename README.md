@@ -2,7 +2,7 @@
 
 **Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience.**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.12+-blue)](https://github.com/jlowin/fastmcp)
 
@@ -204,7 +204,7 @@ database-ontology-mcp/
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.13 or higher
 - PostgreSQL, Snowflake, or Dremio database access
 
 ### Installation
@@ -298,27 +298,30 @@ python server.py
 
 ## Claude Desktop Integration
 
-Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "database-ontology": {
-      "command": "python",
-      "args": ["/absolute/path/to/database-ontology-mcp/server.py"]
-    }
-  }
-}
-```
-
-**Note**: Replace `/absolute/path/to/database-ontology-mcp/` with your actual project path.
-
 **Start the server manually**:
 
 ```bash
 cd /path/to/database-ontology-mcp
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 python server.py
+```
+
+Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "Orionbelt-Semantic-Layer": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://localhost:9000/mcp",
+        "--transport",
+        "http-only"
+      ]
+    }
+  }
+}
 ```
 
 ## MCP Tools Reference
@@ -330,12 +333,15 @@ The server provides **built-in workflow guidance** through FastMCP Context integ
 **Key Workflows:**
 
 1. **Complete Schema Analysis → Ontology → SQL**
+
    - `connect_database` → `analyze_schema` → `generate_ontology` → `execute_sql_query`
 
 2. **Quick Data Exploration**
+
    - `connect_database` → `list_schemas` → `sample_table_data`
 
 3. **SQL Validation → Execution → Visualization**
+
    - `validate_sql_syntax` → `execute_sql_query` → `generate_chart`
 
 4. **Relationship Analysis for Complex Queries**
@@ -387,6 +393,7 @@ Get available database schemas.
 Analyze database schema and return comprehensive table information including relationships.
 
 **Parameters:**
+
 - `schema_name` (optional): Name of schema to analyze
 
 **Returns:** Schema structure with tables, columns, primary keys, foreign keys, and relationship information
@@ -398,6 +405,7 @@ Analyze database schema and return comprehensive table information including rel
 Generate RDF/OWL ontology from database schema with SQL mapping annotations.
 
 **Parameters:**
+
 - `schema_info` (optional): JSON string with schema information
 - `schema_name` (optional): Name of schema to generate ontology from
 - `base_uri` (optional): Base URI for ontology (default: http://example.com/ontology/)
@@ -427,9 +435,11 @@ Secure data sampling with comprehensive validation.
 Advanced SQL validation with comprehensive analysis.
 
 **Parameters:**
+
 - `sql_query` (required): SQL query to validate
 
 **Returns:**
+
 - `is_valid`: Boolean validation result
 - `database_dialect`: Detected database dialect
 - `validation_results`: Detailed component analysis
@@ -473,6 +483,7 @@ GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 Generate interactive charts from SQL query results with support for stacked bar charts and multi-measure line charts.
 
 **Parameters:**
+
 - `data_source` (required): List of dictionaries (typically from `execute_sql_query`)
 - `chart_type` (required): 'bar', 'line', 'scatter', or 'heatmap'
 - `x_column` (required): Column name for X-axis
@@ -496,11 +507,13 @@ Generate interactive charts from SQL query results with support for stacked bar 
 **Output:** Chart saved to `tmp/chart_{timestamp}.png`
 
 **Key Features:**
+
 - **Stacked bar charts** with two dimensions for part-to-whole relationships
 - **Multi-measure line charts** for comparing multiple metrics on the same chart
 - Direct image rendering without base64 encoding for better performance
 
 **Examples:**
+
 ```python
 # Stacked bar chart
 result = execute_sql_query("""
@@ -539,17 +552,20 @@ The server provides **built-in comprehensive instructions** that are automatical
 ### Key Improvements in Recent Updates
 
 **FastMCP 2.12+ Integration**:
+
 - Updated to latest FastMCP version with new resource API
 - Removed deprecated `@mcp.list_resources()` and `@mcp.read_resource()` decorators
 - Implemented new `@mcp.resource()` decorator with URI templates
 
 **Chart Generation Enhancement**:
+
 - Simplified to return Image objects directly (no resource URIs)
 - Removed in-memory image store complexity
 - Direct image rendering for better Claude Desktop integration
 - Charts saved to `tmp/` directory for reference
 
 **Workflow Guidance**:
+
 - Added FastMCP Context parameter to all 9 tools
 - Automatic next-tool suggestions after each operation
 - Comprehensive server instructions for optimal workflows
@@ -660,16 +676,19 @@ else:
 The project includes a comprehensive test suite with significant improvements in recent updates:
 
 **Test Coverage:**
+
 - 70% pass rate with 24 failures (down from 42)
 - Fixed 18 tests across Ontology Generator, Security, and Database Manager
 - Comprehensive test coverage for core functionality
 
 **Security Testing:**
+
 - SQL injection pattern detection (including comment-based attacks)
 - Identifier sanitization validation
 - Credential handling security
 
 **Test Improvements:**
+
 - Enhanced mock setups for database connections
 - Better test isolation and cleanup
 - Documented remaining test issues for future work
@@ -720,11 +739,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### Version 0.3.0
 
 **FastMCP 2.12+ Upgrade** (Oct 2025):
+
 - Upgraded to FastMCP 2.12+ with new resource API
 - Replaced deprecated resource decorators
 - Fixed resource API deprecation warnings
 
 **Chart Generation Enhancement** (Oct 2025):
+
 - **Stacked bar charts** with two dimensions (x_column + color_column)
 - **Multi-measure line charts** for comparing multiple metrics (y_column accepts list)
 - Return Image objects directly instead of resource URIs
@@ -733,12 +754,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Better Claude Desktop integration
 
 **Workflow Guidance Enhancement** (Oct 2025):
+
 - Added FastMCP Context parameter to all tools
 - Automatic next-tool suggestions
 - Comprehensive MCP server instructions
 - Improved client workflow guidance
 
 **Test & Security Improvements** (Oct 2025):
+
 - 43% reduction in test failures (18 tests fixed)
 - Enhanced SQL injection detection (comment-based attacks)
 - Improved identifier sanitization
