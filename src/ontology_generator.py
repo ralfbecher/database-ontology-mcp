@@ -108,23 +108,12 @@ class OntologyGenerator:
         xsd_type = self._map_sql_to_xsd(column.data_type)
         if xsd_type:
             self.graph.add((prop_uri, RDFS.range, xsd_type))
-        
-        # Add cardinality constraints for primary keys and nullable fields
-        if column.is_primary_key:
-            # Primary keys are required and unique
-            restriction = self.base_uri[f"{prop_name}_PK_Restriction"]
-            self.graph.add((restriction, RDF.type, OWL.Restriction))
-            self.graph.add((restriction, OWL.onProperty, prop_uri))
-            self.graph.add((restriction, OWL.cardinality, Literal(1)))
-            self.graph.add((table_uri, RDFS.subClassOf, restriction))
-        elif not column.is_nullable:
-            # Required fields have minimum cardinality 1
-            restriction = self.base_uri[f"{prop_name}_Required_Restriction"]
-            self.graph.add((restriction, RDF.type, OWL.Restriction))
-            self.graph.add((restriction, OWL.onProperty, prop_uri))
-            self.graph.add((restriction, OWL.minCardinality, Literal(1)))
-            self.graph.add((table_uri, RDFS.subClassOf, restriction))
-        
+
+        # Note: Primary key and nullability constraints are already captured
+        # in the metadata annotations (db:isPrimaryKey, db:isNullable).
+        # We don't create OWL restriction classes as that would incorrectly
+        # make table classes subclasses of restrictions.
+
         if column.comment:
             self.graph.add((prop_uri, RDFS.comment, Literal(column.comment)))
 

@@ -294,11 +294,15 @@ class TestOntologyGenerator(unittest.TestCase):
         )
         
         result = self.generator.generate_from_schema([constrained_table])
-        
-        # Check for cardinality restrictions
-        self.assertIn("owl:Restriction", result)
-        self.assertIn("owl:cardinality", result)  # For primary key
-        self.assertIn("owl:minCardinality", result)  # For required fields
+
+        # Check that tables are top-level classes (not subclasses of restrictions)
+        self.assertNotIn("owl:Restriction", result)
+        self.assertNotIn("rdfs:subClassOf", result)
+
+        # Check that constraint metadata is properly annotated
+        self.assertIn("db:isPrimaryKey true", result)  # Primary key annotation
+        self.assertIn("db:isNullable false", result)  # Required field annotation
+        self.assertIn("db:isNullable true", result)  # Optional field annotation
     
     def test_get_enrichment_data(self):
         """Test generation of enrichment data structure."""

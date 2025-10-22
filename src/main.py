@@ -531,14 +531,16 @@ async def list_schemas(ctx: Context = None) -> List[str]:
 @mcp.tool()
 async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None) -> Dict[str, Any]:
     """Analyze a database schema and return comprehensive table information including relationships.
-    
+
     This tool provides complete schema analysis including:
     - Table structure (columns, data types, nullability)
     - Primary key constraints
     - Foreign key relationships (critical for preventing fan-traps)
     - Table comments and metadata
     - Row counts for each table
-    
+
+    The analysis is automatically saved as a JSON file in the tmp/ folder for later use.
+
     RELATIONSHIP ANALYSIS:
     The foreign_keys field for each table contains all relationships, which is CRITICAL for:
     - Identifying 1:many relationships that can cause fan-traps
@@ -550,10 +552,10 @@ async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None)
     1:many patterns (e.g., sales → shipments), multi-fact queries MUST use UNION_ALL
     pattern to avoid data multiplication. See execute_sql_query() documentation for
     safe patterns.
-    
+
     Args:
         schema_name: Name of the schema to analyze (optional)
-    
+
     Returns:
         Dictionary containing:
         - schema: Schema name
@@ -567,6 +569,7 @@ async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None)
                 Each FK contains: column, referenced_table, referenced_column
             - comment: Table description
             - row_count: Number of rows in table
+        - file_path: Path to the saved JSON file in tmp/ folder
         - next_steps: Recommended workflow guidance
         - analytical_guidance: Instructions for next step
     
@@ -621,7 +624,7 @@ async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None)
         "table_count": len(all_table_info),
         "tables": all_table_info
     }
-    
+
     # Add analytical workflow guidance
     if all_table_info:
         schema_result["next_steps"] = {
@@ -648,6 +651,30 @@ async def analyze_schema(schema_name: Optional[str] = None, ctx: Context = None)
     else:
         if ctx:
             await ctx.info("Schema analysis found no tables")
+
+    # Save schema analysis to tmp folder for user access
+    schema_file_path = None
+    try:
+        import json
+        TMP_DIR = Path(__file__).parent.parent / "tmp"
+        TMP_DIR.mkdir(exist_ok=True)  # Ensure tmp directory exists
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
+        schema_filename = f"schema_{schema_safe}_{timestamp}.json"
+        schema_file_path = TMP_DIR / schema_filename
+
+        with open(schema_file_path, 'w', encoding='utf-8') as f:
+            json.dump(schema_result, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Saved schema analysis to: {schema_file_path}")
+
+        # Add file path to result
+        schema_result["file_path"] = str(schema_file_path)
+
+    except Exception as e:
+        logger.warning(f"Failed to save schema analysis to file: {e}")
+        # Continue even if file save failed
 
     return schema_result
 

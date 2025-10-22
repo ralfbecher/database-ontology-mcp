@@ -398,7 +398,12 @@ Analyze database schema and return comprehensive table information including rel
 
 **Returns:** Schema structure with tables, columns, primary keys, foreign keys, and relationship information
 
-**Key Feature:** Foreign key analysis is critical for preventing fan-traps in SQL queries
+**Output:** Schema analysis is automatically saved to `tmp/schema_{schema_name}_{timestamp}.json` for later use
+
+**Key Features:**
+- Foreign key analysis is critical for preventing fan-traps in SQL queries
+- JSON export enables schema reuse and version control
+- File path included in response for easy access
 
 #### 4. `generate_ontology`
 
@@ -735,6 +740,22 @@ pytest tests/test_database_manager.py
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📋 Recent Changes
+
+### Version 0.3.1
+
+**Ontology Generation Fix** (Oct 2025):
+
+- Fixed ontology modeling - tables are now proper top-level OWL classes
+- Removed incorrect `owl:Restriction` subclass relationships
+- PK constraints preserved as metadata annotations (`db:isPrimaryKey`, `db:isNullable`)
+- Follows proper OWL best practices for domain modeling
+
+**Schema Analysis Enhancement** (Oct 2025):
+
+- `analyze_schema` now exports results to JSON files in tmp/ folder
+- Format: `tmp/schema_{schema_name}_{timestamp}.json`
+- Enables schema versioning, reuse, and offline analysis
+- File path included in response for easy access
 
 ### Version 0.3.0
 
