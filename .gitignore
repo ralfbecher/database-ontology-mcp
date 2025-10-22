@@ -29,3 +29,12 @@ tmp/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Generated files and images
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# MCP connection state
+.mcp_db_connection.json
