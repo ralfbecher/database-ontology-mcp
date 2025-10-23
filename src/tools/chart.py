@@ -91,6 +91,52 @@ def generate_chart(
         if x_column not in df.columns:
             return {"error": f"❌ X-axis column '{x_column}' not found in data. Available columns: {list(df.columns)}"}
 
+        # Auto-detect time series data and switch to line chart
+        def is_time_based_column(column_data):
+            """Detect if a column contains time-based data."""
+            # Check if already datetime dtype
+            if pd.api.types.is_datetime64_any_dtype(column_data):
+                return True
+
+            # Sample first few non-null values to check
+            sample = column_data.dropna().head(10)
+            if len(sample) == 0:
+                return False
+
+            # Check for common time-based patterns
+            if column_data.dtype == 'object' or column_data.dtype == 'string':
+                for val in sample:
+                    val_str = str(val).lower()
+                    # Check for common date/time patterns
+                    time_indicators = [
+                        'date', 'time', 'year', 'month', 'day', 'hour',
+                        'timestamp', 'period', 'quarter', 'week'
+                    ]
+                    # Check if value contains date separators or time indicators
+                    if any(sep in str(val) for sep in ['-', '/', ':', 'T']) or \
+                       any(ind in val_str for ind in time_indicators):
+                        try:
+                            # Try to parse as datetime
+                            pd.to_datetime(val)
+                            return True
+                        except (ValueError, TypeError):
+                            pass
+
+            return False
+
+        # Detect time series and auto-switch to line chart
+        if x_column in df.columns and is_time_based_column(df[x_column]):
+            original_chart_type = chart_type
+            if chart_type == "bar":
+                chart_type = "line"
+                logger.info(f"Auto-switched from bar to line chart due to time-based x-axis: {x_column}")
+
+            # Auto-set sorting for time series if not specified
+            if sort_by is None:
+                sort_by = x_column
+                sort_order = "ascending"
+                logger.info(f"Auto-sorting time series by {x_column} ascending")
+
         # Validate y_column(s)
         if chart_type in ["bar", "line", "scatter"] and y_column:
             if isinstance(y_column, list):

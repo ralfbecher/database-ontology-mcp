@@ -1561,6 +1561,18 @@ async def generate_chart(
     """
     # Import the implementation from tools module
     from .tools.chart import generate_chart as generate_chart_impl
+    import json
+
+    # Parse y_column if it's a JSON string representation of a list
+    # This handles cases where MCP passes ["col1", "col2"] as a string
+    if y_column and isinstance(y_column, str):
+        try:
+            parsed = json.loads(y_column)
+            if isinstance(parsed, list):
+                y_column = parsed
+        except (json.JSONDecodeError, ValueError):
+            # Not a JSON string, keep as-is (it's a column name)
+            pass
 
     # Call the implementation to get image bytes and chart_id
     result = generate_chart_impl(

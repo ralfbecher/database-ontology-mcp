@@ -324,6 +324,8 @@ Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
 }
 ```
 
+**Hint:** use Sonnet 4.5 within Claude Desktop. Haiku 4.5 tends to be “looser” with tooling guidance.
+
 ## MCP Tools Reference
 
 ### Workflow Guidance
@@ -401,6 +403,7 @@ Analyze database schema and return comprehensive table information including rel
 **Output:** Schema analysis is automatically saved to `tmp/schema_{schema_name}_{timestamp}.json` for later use
 
 **Key Features:**
+
 - Foreign key analysis is critical for preventing fan-traps in SQL queries
 - JSON export enables schema reuse and version control
 - File path included in response for easy access
