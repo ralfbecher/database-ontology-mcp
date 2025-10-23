@@ -13,6 +13,18 @@ logger = logging.getLogger(__name__)
 TMP_DIR = Path(__file__).parent.parent / "tmp"
 
 
+def format_measure_name(measure: str) -> str:
+    """Format measure name by removing underscores and applying title case.
+
+    Args:
+        measure: Raw measure name (e.g., "total_revenue", "profit_margin_pct")
+
+    Returns:
+        Formatted measure name (e.g., "Total Revenue", "Profit Margin Pct")
+    """
+    return measure.replace('_', ' ').title()
+
+
 def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width=800, height=600, sort_by=None, sort_order=None):
     """Create Plotly chart based on type.
 
@@ -93,23 +105,67 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
 
         # Support multiple measures for line charts
         if isinstance(y_column, list):
-            # Multiple measures - create separate line for each measure
+            # Multiple measures - separate into regular and percentage measures
+            # Strip spaces and check case-insensitively for percentage measures
+            pct_measures = [m for m in y_column if m in sorted_df.columns and (
+                m.strip().lower().endswith('_pct') or
+                m.strip().lower().endswith('_percent') or
+                m.strip().lower().endswith('_percentage')
+            )]
+            value_measures = [m for m in y_column if m in sorted_df.columns and m not in pct_measures]
+
             fig = go.Figure()
-            for measure in y_column:
-                if measure not in sorted_df.columns:
-                    continue
+
+            # Plot value measures on primary y-axis
+            for measure in value_measures:
                 fig.add_trace(go.Scatter(
                     x=sorted_df[x_column],
                     y=sorted_df[measure],
                     mode='lines+markers',
-                    name=measure
+                    name=format_measure_name(measure),
+                    yaxis='y',
+                    showlegend=True
                 ))
-            fig.update_layout(
-                title=title,
-                xaxis_title=x_column,
-                yaxis_title="Value",
-                showlegend=True
-            )
+
+            # Plot percentage measures on secondary y-axis if we have both types
+            for measure in pct_measures:
+                fig.add_trace(go.Scatter(
+                    x=sorted_df[x_column],
+                    y=sorted_df[measure],
+                    mode='lines+markers',
+                    name=format_measure_name(measure),
+                    yaxis='y2' if value_measures else 'y',
+                    line=dict(dash='dash') if value_measures else None,
+                    showlegend=True
+                ))
+
+            # Configure layout with dual y-axes if needed
+            layout_config = {
+                'title': title,
+                'xaxis_title': x_column,
+                'showlegend': True
+            }
+
+            if pct_measures and value_measures:
+                # Dual y-axis configuration
+                layout_config['yaxis'] = dict(
+                    title=", ".join([format_measure_name(m) for m in value_measures]),
+                    side='left'
+                )
+                layout_config['yaxis2'] = dict(
+                    title=", ".join([format_measure_name(m) for m in pct_measures]),
+                    side='right',
+                    overlaying='y',
+                    titlefont=dict(color='gray'),
+                    tickfont=dict(color='gray'),
+                    ticksuffix='%'
+                )
+            elif pct_measures:
+                layout_config['yaxis_title'] = ", ".join([format_measure_name(m) for m in pct_measures])
+            else:
+                layout_config['yaxis_title'] = ", ".join([format_measure_name(m) for m in value_measures])
+
+            fig.update_layout(**layout_config)
         else:
             # Single measure with optional color grouping
             fig = px.line(sorted_df, x=x_column, y=y_column, color=color_column, title=title)
@@ -165,19 +221,33 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     # Determine if we should show legend
     show_legend = bool(color_column or (chart_type == "line" and isinstance(y_column, list)))
 
-    fig.update_layout(
-        font=dict(size=12),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(b=100, t=60, l=60, r=200),  # Extra right margin for legend
-        showlegend=show_legend,
-        legend=dict(
+    # For line charts with multiple measures, use horizontal legend between title and plot
+    if chart_type == "line" and isinstance(y_column, list):
+        legend_config = dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.0,  # Position at top of plot area (below title)
+            xanchor="center",
+            x=0.5
+        )
+        margin_config = dict(b=100, t=120, l=60, r=60)  # Extra top margin for title and legend space
+    else:
+        legend_config = dict(
             orientation="v",
             yanchor="middle",
             y=0.5,
             xanchor="left",
-            x=1.02  # Position legend just outside the plot area on the right
-        ),
+            x=1.02
+        )
+        margin_config = dict(b=100, t=60, l=60, r=200)  # Extra right margin for legend
+
+    fig.update_layout(
+        font=dict(size=12),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=margin_config,
+        showlegend=show_legend,
+        legend=legend_config,
         width=width,
         height=height
     )
@@ -266,19 +336,51 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
 
         # Support multiple measures for line charts
         if isinstance(y_column, list):
-            # Multiple measures - create separate line for each measure
-            for measure in y_column:
-                if measure not in sorted_df.columns:
-                    continue
-                ax.plot(sorted_df[x_column], sorted_df[measure], label=measure, marker='o')
-            ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
-            ax.set_ylabel("Value")
+            # Multiple measures - separate into regular and percentage measures
+            # Strip spaces and check case-insensitively for percentage measures
+            pct_measures = [m for m in y_column if m in sorted_df.columns and (
+                m.strip().lower().endswith('_pct') or
+                m.strip().lower().endswith('_percent') or
+                m.strip().lower().endswith('_percentage')
+            )]
+            value_measures = [m for m in y_column if m in sorted_df.columns and m not in pct_measures]
+
+            # Plot value measures on primary y-axis
+            for measure in value_measures:
+                ax.plot(sorted_df[x_column], sorted_df[measure], label=format_measure_name(measure), marker='o')
+
+            # If we have both value and percentage measures, create secondary y-axis for percentages
+            if pct_measures and value_measures:
+                ax2 = ax.twinx()
+                for measure in pct_measures:
+                    ax2.plot(sorted_df[x_column], sorted_df[measure], label=format_measure_name(measure), marker='o', linestyle='--')
+                ax2.set_ylabel(", ".join([format_measure_name(m) for m in pct_measures]), color='gray')
+                ax2.tick_params(axis='y', labelcolor='gray')
+                # Format y-axis ticks as percentages
+                from matplotlib.ticker import FuncFormatter
+                ax2.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:.0f}%'))
+
+                # Combine legends from both axes - position between title and plot
+                lines1, labels1 = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax.legend(lines1 + lines2, labels1 + labels2, bbox_to_anchor=(0.5, 1.0), loc='lower center', ncol=3, borderaxespad=0.5)
+                ax.set_ylabel(", ".join([format_measure_name(m) for m in value_measures]))
+            elif pct_measures:
+                # Only percentage measures
+                for measure in pct_measures:
+                    ax.plot(sorted_df[x_column], sorted_df[measure], label=format_measure_name(measure), marker='o')
+                ax.legend(bbox_to_anchor=(0.5, 1.0), loc='lower center', ncol=3, borderaxespad=0.5)
+                ax.set_ylabel(", ".join([format_measure_name(m) for m in pct_measures]))
+            else:
+                # Only value measures
+                ax.legend(bbox_to_anchor=(0.5, 1.0), loc='lower center', ncol=3, borderaxespad=0.5)
+                ax.set_ylabel(", ".join([format_measure_name(m) for m in value_measures]))
         elif color_column:
             # Single measure with color grouping
             for group in sorted_df[color_column].unique():
                 group_data = sorted_df[sorted_df[color_column] == group]
                 ax.plot(group_data[x_column], group_data[y_column], label=group, marker='o')
-            ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
+            ax.legend(bbox_to_anchor=(0.5, 1.0), loc='lower center', ncol=3, borderaxespad=0.5)
         else:
             # Simple line chart
             ax.plot(sorted_df[x_column], sorted_df[y_column], marker='o')
@@ -321,15 +423,23 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
                 # Rotate x-axis labels for better readability
                 plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
     
-    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel(x_column)
-    if y_column:
+    # Only set y_column as ylabel if it's not a multi-measure line chart (which sets its own labels)
+    if y_column and not (chart_type == "line" and isinstance(y_column, list)):
         ax.set_ylabel(y_column)
 
-    # Position any legend outside the plot area on the right
+    # Position any legend at top center for line charts with multiple measures, otherwise on the right
     legend = ax.get_legend()
     if legend is not None:
-        ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
+        if chart_type == "line" and isinstance(y_column, list):
+            # Legend already positioned at top in the line chart code above
+            # Add title with extra padding to make room for legend
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=40)
+        else:
+            ax.legend(bbox_to_anchor=(1.05, 0.5), loc='center left', borderaxespad=0.)
+            ax.set_title(title, fontsize=14, fontweight='bold')
+    else:
+        ax.set_title(title, fontsize=14, fontweight='bold')
 
     plt.tight_layout()
     return fig
