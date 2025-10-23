@@ -16,6 +16,7 @@ from mcp.server.fastmcp import Context
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
 from .config import config_manager
+from . import __version__, __name__ as SERVER_NAME
 
 # Load environment variables from project root FIRST
 # Try multiple possible paths for .env file
@@ -51,7 +52,7 @@ else:
 
 # Create server instance with comprehensive instructions
 mcp = FastMCP(
-    name="Database Ontology MCP Server",
+    name=SERVER_NAME,
     instructions="""
 # Orionbelt Semantic Layer - Database Ontology MCP Server
 
@@ -320,10 +321,10 @@ analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_s
 
 ---
 
-**Server Version**: 0.3.0
+**Server Version**: {__version__}
 **Supported Databases**: PostgreSQL, Snowflake, Dremio
 **Primary Use Case**: Semantic database analysis with ontology-enhanced Text-to-SQL generation
-"""
+""".format(__version__=__version__)
 )
 
 
@@ -1617,13 +1618,16 @@ async def get_server_info(ctx: Context = None) -> Dict[str, Any]:
     Returns:
         Dictionary containing server information
     """
+    # Import centralized version info
+    from . import __version__, __name__ as SERVER_NAME, __description__
+
     if ctx:
         await ctx.info("Server info retrieved; next call should be connect_database to start working")
 
     return {
-        "name": "Database Ontology MCP Server",
-        "version": "0.1.0",
-        "description": "MCP server for database schema analysis and ontology generation",
+        "name": SERVER_NAME,
+        "version": __version__,
+        "description": __description__,
         "supported_databases": ["postgresql", "snowflake", "dremio"],
         "features": [
             "Database connection management",
