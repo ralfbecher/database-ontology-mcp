@@ -156,18 +156,18 @@ class TestDatabaseManager(unittest.TestCase):
 
         # Mock the row count query result - scalar() must return actual int, not Mock
         mock_count_result = Mock()
-        mock_count_result.scalar = MagicMock(return_value=100)
+        mock_count_result.scalar.return_value = 100
 
         # Mock the sample data query result
         mock_sample_result = Mock()
-        mock_sample_result.keys = Mock(return_value=['id', 'name'])
-        mock_sample_result.fetchall = Mock(return_value=[
+        mock_sample_result.keys.return_value = ['id', 'name']
+        mock_sample_result.fetchall.return_value = [
             (1, 'Test User 1'),
             (2, 'Test User 2')
-        ])
+        ]
 
         # Mock execute to return different results for different queries
-        mock_conn.execute = Mock(side_effect=[mock_count_result, mock_sample_result])
+        mock_conn.execute.side_effect = [mock_count_result, mock_sample_result]
 
         self.db_manager.engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
         self.db_manager.engine.connect.return_value.__exit__ = Mock(return_value=None)
@@ -240,30 +240,40 @@ class TestDatabaseManager(unittest.TestCase):
         # Test with negative limit - should use default
         mock_conn = Mock()
         mock_result = Mock()
-        mock_result.keys.return_value = ['id', 'name']
-        mock_result.fetchall.return_value = []
-        mock_conn.execute.return_value = mock_result
-        self.db_manager.engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
-        self.db_manager.engine.connect.return_value.__exit__ = Mock(return_value=None)
+        # keys() needs to return an iterable, not just have a return_value
+        mock_result.keys = Mock(return_value=['id', 'name'])
+        mock_result.fetchall = Mock(return_value=[])
+        mock_conn.execute = Mock(return_value=mock_result)
+
+        # Mock get_connection context manager properly
+        mock_context = Mock()
+        mock_context.__enter__ = Mock(return_value=mock_conn)
+        mock_context.__exit__ = Mock(return_value=None)
+        self.db_manager.engine.connect = Mock(return_value=mock_context)
 
         result = self.db_manager.sample_table_data("test_table", limit=-1)
         self.assertEqual(result, [])
 
         # Test with very large limit - should be capped at MAX_SAMPLE_LIMIT (1000)
-        # Reset the mock for the second call
-        mock_conn.reset_mock()
+        # Create new mocks for the second call
+        mock_conn2 = Mock()
         mock_result2 = Mock()
-        mock_result2.keys.return_value = ['id', 'name']
-        mock_result2.fetchall.return_value = []
-        mock_conn.execute.return_value = mock_result2
+        mock_result2.keys = Mock(return_value=['id', 'name'])
+        mock_result2.fetchall = Mock(return_value=[])
+        mock_conn2.execute = Mock(return_value=mock_result2)
+
+        mock_context2 = Mock()
+        mock_context2.__enter__ = Mock(return_value=mock_conn2)
+        mock_context2.__exit__ = Mock(return_value=None)
+        self.db_manager.engine.connect = Mock(return_value=mock_context2)
 
         result = self.db_manager.sample_table_data("test_table", limit=2000)
         # Should be capped at MAX_SAMPLE_LIMIT (1000)
-        mock_conn.execute.assert_called()
+        mock_conn2.execute.assert_called()
         # Check the SQL query contains LIMIT 1000
-        call_args = mock_conn.execute.call_args
-        # The first argument should be the text() object, second is params dict
-        self.assertEqual(call_args[1]['limit'], 1000)
+        call_args = mock_conn2.execute.call_args
+        # The second argument should be the params dict
+        self.assertEqual(call_args[0][1]['limit'], 1000)
     
     def test_disconnect(self):
         """Test database disconnection."""

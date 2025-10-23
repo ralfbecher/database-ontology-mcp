@@ -15,6 +15,7 @@ from mcp.server.fastmcp import Context
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
+from .config import config_manager
 
 # Load environment variables from project root FIRST
 # Try multiple possible paths for .env file
