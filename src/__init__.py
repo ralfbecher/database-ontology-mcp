@@ -1,6 +1,6 @@
 """Orionbelt Semantic Layer - Ontology-based MCP server for your Text-2-SQL convenience."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 __author__ = "Orionbelt Semantic Layer Contributors"
 __email__ = "contributors@example.com"
 __description__ = "Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience"

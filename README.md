@@ -204,7 +204,8 @@ database-ontology-mcp/
 
 ### Prerequisites
 
-- Python 3.13 or higher
+- **Python 3.13 or higher** (required)
+- **uv** package manager (recommended) - [Install uv](https://github.com/astral-sh/uv)
 - PostgreSQL, Snowflake, or Dremio database access
 
 ### Installation
@@ -216,22 +217,27 @@ git clone https://github.com/ralfbecher/database-ontology-mcp
 cd database-ontology-mcp
 ```
 
-2. **Create and activate a virtual environment:**
+2. **Install dependencies with uv (recommended):**
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. **Install all dependencies:**
-
-```bash
+# Install all dependencies using uv (automatically creates venv with Python 3.13)
 uv sync
 ```
 
-**Note**: The charting functionality requires visualization libraries (pandas, plotly, matplotlib, seaborn). These are included in `requirements.txt` and will be installed automatically in your virtual environment.
+**Alternative: Manual venv setup**
 
-4. **Configure environment:**
+```bash
+# Create and activate a virtual environment with Python 3.13
+python3.13 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -e .
+```
+
+**Note**: The charting functionality requires visualization libraries (pandas, plotly, matplotlib, seaborn). These are automatically installed via `uv sync` or `pip install -e .`
+
+3. **Configure environment:**
 
 ```bash
 # Create .env file with your database credentials
@@ -289,10 +295,16 @@ DREMIO_PASSWORD=your_password
 
 ### Running the Server
 
-**Make sure your virtual environment is activated:**
+**With uv (recommended):**
 
 ```bash
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv run python server.py
+```
+
+**Or with activated virtual environment:**
+
+```bash
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 python server.py
 ```
 
@@ -302,7 +314,14 @@ python server.py
 
 ```bash
 cd /path/to/database-ontology-mcp
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv run python server.py
+```
+
+**Or with activated venv:**
+
+```bash
+cd /path/to/database-ontology-mcp
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 python server.py
 ```
 
@@ -743,6 +762,16 @@ pytest tests/test_database_manager.py
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📋 Recent Changes
+
+### Version 0.3.2
+
+**Python 3.13 Upgrade** (Oct 2025):
+
+- Updated project to require Python 3.13+
+- Configured `uv` for Python 3.13 support via `.python-version` file
+- Updated `pyproject.toml` to reflect Python 3.13 requirements
+- Updated Black and mypy configurations for Python 3.13
+- Modernized README with `uv`-based workflow instructions
 
 ### Version 0.3.1
 
