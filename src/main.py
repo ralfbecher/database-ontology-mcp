@@ -301,8 +301,8 @@ orders (1) → shipments (many)
 
 ## 📝 OUTPUT LOCATIONS
 
-- **Ontologies**: Saved to `tmp/ontology_{schema}_{timestamp}.ttl`
-- **Charts**: Saved to `tmp/chart_{timestamp}.png`
+- **Ontologies**: Saved to `tmp/ontology_{{schema}}_{{timestamp}}.ttl`
+- **Charts**: Saved to `tmp/chart_{{timestamp}}.png`
 - **Logs**: Console output with INFO/WARNING/ERROR levels
 
 ## 🔗 TOOL CHAINING EXAMPLES
