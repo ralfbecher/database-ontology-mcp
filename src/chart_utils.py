@@ -59,7 +59,8 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
                 total_by_category = agg_df.groupby(x_column)[effective_sort_by].sum().sort_values(ascending=sort_ascending)
             category_order = total_by_category.index.tolist()
             fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column, title=title,
-                        barmode='stack', category_orders={x_column: category_order})
+                        barmode='stack', category_orders={x_column: category_order},
+                        labels={y_column: format_measure_name(y_column)})
         elif color_column:
             # Grouped bar chart - aggregate data first to handle duplicates
             agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
@@ -71,7 +72,8 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
                 total_by_category = agg_df.groupby(x_column)[effective_sort_by].sum().sort_values(ascending=sort_ascending)
             category_order = total_by_category.index.tolist()
             fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column, title=title,
-                        barmode='group', category_orders={x_column: category_order})
+                        barmode='group', category_orders={x_column: category_order},
+                        labels={y_column: format_measure_name(y_column)})
             # Make bars wider for grouped charts
             fig.update_layout(bargap=0.15, bargroupgap=0.05)
         else:
@@ -81,7 +83,8 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             sorted_df = agg_df.sort_values(by=effective_sort_by, ascending=sort_ascending)
             category_order = sorted_df[x_column].tolist()
             fig = px.bar(sorted_df, x=x_column, y=y_column, title=title,
-                        category_orders={x_column: category_order})
+                        category_orders={x_column: category_order},
+                        labels={y_column: format_measure_name(y_column)})
     elif chart_type == "line":
         # Work with a copy to avoid modifying the original dataframe
         sorted_df = df.copy()
@@ -168,14 +171,16 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             fig.update_layout(**layout_config)
         else:
             # Single measure with optional color grouping
-            fig = px.line(sorted_df, x=x_column, y=y_column, color=color_column, title=title)
+            fig = px.line(sorted_df, x=x_column, y=y_column, color=color_column, title=title,
+                         labels={y_column: format_measure_name(y_column)})
 
         # Enhance for time series
         if sorted_df[x_column].dtype in ['datetime64[ns]']:
             fig.update_xaxes(title=x_column, type='date')
     elif chart_type == "scatter":
         fig = px.scatter(df, x=x_column, y=y_column, color=color_column, title=title,
-                        size_max=15)
+                        size_max=15,
+                        labels={y_column: format_measure_name(y_column)})
     elif chart_type == "heatmap":
         if y_column:
             # Pivot table heatmap
@@ -426,7 +431,11 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
     ax.set_xlabel(x_column)
     # Only set y_column as ylabel if it's not a multi-measure line chart (which sets its own labels)
     if y_column and not (chart_type == "line" and isinstance(y_column, list)):
-        ax.set_ylabel(y_column)
+        # For bar, scatter, and single-measure line charts, format the measure name
+        if chart_type in ["bar", "scatter", "line"]:
+            ax.set_ylabel(format_measure_name(y_column))
+        else:
+            ax.set_ylabel(y_column)
 
     # Position any legend at top center for line charts with multiple measures, otherwise on the right
     legend = ax.get_legend()
