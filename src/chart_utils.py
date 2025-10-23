@@ -180,7 +180,8 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     elif chart_type == "scatter":
         fig = px.scatter(df, x=x_column, y=y_column, color=color_column, title=title,
                         size_max=15,
-                        labels={y_column: format_measure_name(y_column)})
+                        labels={x_column: format_measure_name(x_column),
+                                y_column: format_measure_name(y_column)})
     elif chart_type == "heatmap":
         if y_column:
             # Pivot table heatmap
@@ -428,7 +429,12 @@ def create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, ti
                 # Rotate x-axis labels for better readability
                 plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
     
-    ax.set_xlabel(x_column)
+    # For scatter plots, format both x and y axis labels (both are measures)
+    if chart_type == "scatter":
+        ax.set_xlabel(format_measure_name(x_column))
+    else:
+        ax.set_xlabel(x_column)
+
     # Only set y_column as ylabel if it's not a multi-measure line chart (which sets its own labels)
     if y_column and not (chart_type == "line" and isinstance(y_column, list)):
         # For bar, scatter, and single-measure line charts, format the measure name
