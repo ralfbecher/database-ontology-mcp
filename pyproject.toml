@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-semantic-layer"
-version = "0.3.2"
+version = "0.3.3"
 description = "Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience"
 authors = [
     {name = "Orionbelt Semantic Layer Contributors", email = "contributors@example.com"}

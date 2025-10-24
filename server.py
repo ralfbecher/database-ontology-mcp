@@ -103,8 +103,8 @@ def main():
         logger.info("🚀 Starting Orionbelt Semantic Layer MCP server with stdio transport...")
         logger.info("📡 Server ready for stdio MCP protocol messages")
         
-        # Start the server with http transport
-        mcp.run(transport="http", host="0.0.0.0", port=9000)
+        # Start the server with http transport on standard /sse endpoint
+        mcp.run(transport="http", host="0.0.0.0", port=9000, path="/sse")
         
     except KeyboardInterrupt:
         logger.info("⏹️  Server stopped by user (Ctrl+C)")

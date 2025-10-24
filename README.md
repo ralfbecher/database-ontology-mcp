@@ -334,7 +334,7 @@ Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://localhost:9000/mcp",
+        "http://localhost:9000/sse",
         "--transport",
         "http-only"
       ]
