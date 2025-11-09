@@ -257,6 +257,14 @@ Create a `.env` file in the project root:
 LOG_LEVEL=INFO
 ONTOLOGY_BASE_URI=http://example.com/ontology/
 
+# MCP Transport Configuration
+# Options: http, sse (Server-Sent Events)
+# - http: Standard HTTP transport (streamable, default)
+# - sse: Server-Sent Events for (legacy)
+MCP_TRANSPORT=http
+MCP_SERVER_HOST=localhost
+MCP_SERVER_PORT=9000
+
 # PostgreSQL Configuration (optional - can provide via tool parameters)
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
@@ -293,12 +301,21 @@ DREMIO_PASSWORD=your_password
 # - Connection: Uses PostgreSQL protocol, no additional drivers needed
 ```
 
+#### Transport Configuration
+
+The server supports two MCP transport modes:
+
+- **`http` (default, recommended)**: Streamable HTTP transport for modern MCP clients. This is the standard transport for FastMCP servers and provides better performance and reliability.
+- **`sse`**: Server-Sent Events transport for legacy compatibility. Use this if you need compatibility with older MCP clients.
+
+You can configure the transport by setting `MCP_TRANSPORT` in your `.env` file. The server will automatically validate the transport type and default to `http` if an invalid value is provided.
+
 ### Running the Server
 
 **With uv (recommended):**
 
 ```bash
-uv run python server.py
+uv run server.py
 ```
 
 **Or with activated virtual environment:**
@@ -314,7 +331,7 @@ python server.py
 
 ```bash
 cd /path/to/database-ontology-mcp
-uv run python server.py
+uv run server.py
 ```
 
 **Or with activated venv:**
@@ -343,7 +360,32 @@ Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
 }
 ```
 
-**Hint:** use Sonnet 4.5 within Claude Desktop. Haiku 4.5 tends to be “looser” with tooling guidance.
+**Hint:** use Sonnet 4.5 within Claude Desktop. Haiku 4.5 tends to be "looser" with tooling guidance.
+
+## LibreChat Integration
+
+**Run MCP Transport SSE for LibreChat**:
+
+Start the server manually with SSE transport:
+
+```bash
+cd /path/to/database-ontology-mcp
+# Set MCP_TRANSPORT=sse in your .env file first
+uv run server.py
+```
+
+Add to your `librechat.yaml`:
+
+```yaml
+# MCP Servers Configuration
+mcpServers:
+  Orionbelt-Semantic-Layer:
+    url: "http://host.docker.internal:9000/sse"
+    timeout: 60000 # 1 minute timeout for this server
+    startup: true # Initialize during app startup
+```
+
+**Note:** LibreChat requires SSE transport (having seen some bugs with transport http). Make sure to set `MCP_TRANSPORT=sse` in your `.env` file before starting the server.
 
 ## MCP Tools Reference
 
@@ -716,6 +758,7 @@ The project includes a comprehensive test suite covering core functionality:
 **Remaining Test Issues:**
 
 1. **Server/MCP Tools Tests (20 failures):**
+
    - **Root Cause:** Tests written for pre-FastMCP 2.12 architecture
    - Tests try to call tools as direct functions (e.g., `connect_database()`)
    - Current implementation uses `@mcp.tool()` decorator with async functions
@@ -723,6 +766,7 @@ The project includes a comprehensive test suite covering core functionality:
    - **Impact:** Does NOT affect production functionality - all MCP tools work correctly
 
 2. **Database Manager Tests (2 failures):**
+
    - Mock configuration issues with SQLAlchemy context managers
    - `get_connection()` context manager not properly mocked in tests
    - **Fix Required:** Update mock setup for `engine.connect()` context manager
@@ -733,6 +777,7 @@ The project includes a comprehensive test suite covering core functionality:
    - **Fix Required:** Enhanced mock configuration for security validators
 
 **What Works (Verified by Tests):**
+
 - ✅ Ontology generation (16/16 tests pass)
 - ✅ Core security validation (13/17 tests pass)
 - ✅ Database operations (16/18 tests pass)
@@ -761,6 +806,7 @@ uv run pytest -k "not TestMCPTools and not TestOntologyGenerator" tests/test_ser
 **Important Note:**
 
 The 24 failing tests are **test infrastructure issues**, not production bugs:
+
 - Server tests need to be rewritten for FastMCP 2.12+ architecture
 - Mock configurations need updates for SQLAlchemy context managers
 - All actual MCP tools and features work correctly in Claude Desktop

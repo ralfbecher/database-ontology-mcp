@@ -16,11 +16,19 @@ class ServerConfig:
     """Server configuration settings."""
     log_level: str
     ontology_base_uri: str
-    
+    mcp_transport: str = "http"  # Default to http transport
+    mcp_server_host: str = "localhost"
+    mcp_server_port: int = 9000
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         if not self.ontology_base_uri.endswith('/'):
             self.ontology_base_uri += '/'
+
+        # Validate transport type
+        if self.mcp_transport not in ["http", "sse"]:
+            logger.warning(f"Invalid MCP_TRANSPORT value '{self.mcp_transport}'. Defaulting to 'http'.")
+            self.mcp_transport = "http"
 
 
 @dataclass
@@ -71,7 +79,10 @@ class ConfigManager:
         if self._server_config is None:
             self._server_config = ServerConfig(
                 log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
-                ontology_base_uri=os.getenv("ONTOLOGY_BASE_URI", DEFAULT_BASE_URI)
+                ontology_base_uri=os.getenv("ONTOLOGY_BASE_URI", DEFAULT_BASE_URI),
+                mcp_transport=os.getenv("MCP_TRANSPORT", "http").lower(),
+                mcp_server_host=os.getenv("MCP_SERVER_HOST", "localhost"),
+                mcp_server_port=int(os.getenv("MCP_SERVER_PORT", "9000"))
             )
             logger.info("Server configuration loaded")
         return self._server_config

@@ -62,6 +62,9 @@ def print_startup_info():
     logger.info(f"📋 Configuration:")
     logger.info(f"  • Log Level: {config.log_level}")
     logger.info(f"  • Base URI: {config.ontology_base_uri}")
+    logger.info(f"  • Transport: {config.mcp_transport}")
+    logger.info(f"  • Host: {config.mcp_server_host}")
+    logger.info(f"  • Port: {config.mcp_server_port}")
     logger.info("")
 
 def cleanup_tmp_folder():
@@ -100,10 +103,11 @@ def main():
         # Print startup information
         print_startup_info()
         
-        logger.info("🚀 Starting Orionbelt Semantic Layer MCP server with streamable-http transport...")
+        transport_name = "streamable-http" if config.mcp_transport == "http" else "SSE"
+        logger.info(f"🚀 Starting Orionbelt Semantic Layer MCP server with {transport_name} transport...")
         logger.info("📡 Server ready for MCP protocol messages")
-        
-        mcp.run(transport="http", host="0.0.0.0", port=9000)
+
+        mcp.run(transport=config.mcp_transport, host=config.mcp_server_host, port=config.mcp_server_port)
         
     except KeyboardInterrupt:
         logger.info("⏹️  Server stopped by user (Ctrl+C)")
