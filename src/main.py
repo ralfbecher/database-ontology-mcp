@@ -1282,12 +1282,16 @@ async def execute_sql_query(
     
     Args:
         sql_query: The SQL query to execute. Must be a valid SELECT or introspection query.
-                  DML operations (INSERT, UPDATE, DELETE) and DDL operations (CREATE, DROP, ALTER) 
+                  DML operations (INSERT, UPDATE, DELETE) and DDL operations (CREATE, DROP, ALTER)
                   are not permitted for security reasons.
         limit: Maximum number of rows to return (default: 1000, max: 10000).
-              This prevents memory exhaustion from large result sets while allowing 
+              This prevents memory exhaustion from large result sets while allowing
               comprehensive data analysis.
-    
+        checklist_completed: Boolean flag confirming that the pre-execution checklist has been
+                           completed (default: False). This includes relationship analysis,
+                           fan-trap detection, and safe pattern selection. Must be set to True
+                           to execute queries.
+
     Returns:
         Dictionary containing:
         - success: Boolean indicating if query executed successfully
