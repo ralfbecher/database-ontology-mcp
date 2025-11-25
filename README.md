@@ -21,11 +21,13 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 - **Enhanced connection management** with retry logic and timeout handling
 - **Automatic dependency management** for Snowflake and Dremio connectors
 
-### 🎯 9 Essential Tools
+### 🎯 12 Essential Tools
 
 - **Streamlined workflow** with focused, purpose-built tools
 - **Interactive charting** (`generate_chart`) with direct image rendering
 - **Comprehensive schema analysis** with automatic ontology generation
+- **Semantic name resolution** for business-friendly ontologies
+- **Custom ontology loading** from external files
 - **Built-in workflow guidance** via FastMCP Context integration
 - **Focus on results** - maximum effectiveness with minimum complexity
 
@@ -175,7 +177,7 @@ sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
 database-ontology-mcp/
 ├── src/
 │   ├── __init__.py                 # Package initialization
-│   ├── main.py                     # FastMCP server entry point (9 tools)
+│   ├── main.py                     # FastMCP server entry point (12 tools)
 │   ├── database_manager.py         # Database connection and analysis
 │   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
 │   ├── dremio_client.py            # Dremio database client
@@ -483,9 +485,107 @@ Generate RDF/OWL ontology from database schema with SQL mapping annotations.
 
 **Output:** Ontology is saved to `tmp/ontology_{schema}_{timestamp}.ttl`
 
+### Semantic Name Resolution Tools
+
+#### 5. `suggest_semantic_names`
+
+Extract and analyze names from a generated ontology to identify abbreviations and cryptic names for business-friendly improvements.
+
+**Purpose:** Since MCP Sampling is not available in Claude Desktop, this tool enables a workflow where the LLM can review and suggest better names.
+
+**Parameters:**
+
+- `ontology_ttl` (optional): Turtle format ontology string to analyze
+- `schema_name` (optional): Schema name to regenerate ontology from database
+
+**Returns:**
+
+- `classes`: List of table/class names with analysis
+- `properties`: List of column/property names with analysis
+- `relationships`: List of foreign key relationships with analysis
+- `analysis_hints`: Summary of detected issues
+- `llm_instructions`: Instructions for generating name suggestions
+
+**Name Detection:** Automatically detects abbreviations (`cust`, `ord`, `amt`), cryptic suffixes (`_dt`, `_cd`, `_no`), technical prefixes (`pk_`, `fk_`, `tbl_`), and all-caps acronyms.
+
+#### 6. `apply_semantic_names`
+
+Apply LLM-suggested semantic names to the ontology, updating labels and adding business descriptions.
+
+**Parameters:**
+
+- `suggestions` (required): JSON string with name suggestions:
+  ```json
+  {
+    "classes": [{"original_name": "cust_mstr", "suggested_name": "Customer Master", "description": "..."}],
+    "properties": [{"original_name": "ord_dt", "table_name": "orders", "suggested_name": "Order Date", "description": "..."}],
+    "relationships": [{"original_name": "orders_has_customers", "suggested_name": "Placed By", "description": "..."}]
+  }
+  ```
+- `schema_name` (optional): Schema name to regenerate ontology before applying
+- `save_to_file` (optional): Whether to save updated ontology (default: true)
+
+**Output:** Updated ontology saved to `tmp/ontology_{schema}_semantic_{timestamp}.ttl`
+
+**What Gets Updated:**
+
+- `rdfs:label` → suggested business-friendly name
+- `db:semanticName` → new semantic annotation
+- `db:businessDescription` → provided description
+- Original `db:tableName`/`db:columnName` preserved for SQL generation
+
+**Workflow Example:**
+
+```python
+# 1. Generate initial ontology
+generate_ontology(schema_name="public")
+
+# 2. Extract names for review
+suggest_semantic_names(schema_name="public")
+
+# 3. Apply LLM suggestions
+apply_semantic_names(suggestions='{"classes": [{"original_name": "cust", "suggested_name": "Customer", "description": "Customer entity"}]}')
+```
+
+#### 7. `load_my_ontology`
+
+Load a custom .ttl ontology file from an import folder to use as semantic context.
+
+**Purpose:** Use pre-existing or manually curated ontologies instead of auto-generating from database schema.
+
+**Parameters:**
+
+- `import_folder` (optional): Path to folder containing .ttl files (default: `./import`)
+
+**Behavior:**
+
+1. Scans the import folder for .ttl files
+2. Selects the newest file by modification time
+3. Parses and validates the ontology
+4. Stores in server state for subsequent operations
+
+**Returns:**
+
+- `success`: Boolean indicating if ontology was loaded
+- `file_path`: Path to the loaded file
+- `classes_count`: Number of OWL classes found
+- `properties_count`: Number of properties found
+- `relationships_count`: Number of object properties found
+- `ontology_preview`: First 2000 characters of the ontology
+
+**Example:**
+
+```python
+# Load from default import folder
+load_my_ontology()
+
+# Load from custom folder
+load_my_ontology(import_folder="/path/to/my/ontologies")
+```
+
 ### Data & Validation Tools
 
-#### 5. `sample_table_data`
+#### 8. `sample_table_data`
 
 Secure data sampling with comprehensive validation.
 
@@ -499,7 +599,7 @@ Secure data sampling with comprehensive validation.
 }
 ```
 
-#### 6. `validate_sql_syntax`
+#### 9. `validate_sql_syntax`
 
 Advanced SQL validation with comprehensive analysis.
 
@@ -519,7 +619,7 @@ Advanced SQL validation with comprehensive analysis.
 
 **Features:** Multi-database syntax checking, injection detection, performance analysis
 
-#### 7. `execute_sql_query`
+#### 10. `execute_sql_query`
 
 Safe SQL execution with comprehensive safety protocols.
 
@@ -547,13 +647,16 @@ FROM sales s LEFT JOIN returns r ON s.customer_id = r.customer_id
 GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 ```
 
-#### 8. `generate_chart`
+#### 11. `generate_chart`
 
 Generate interactive charts from SQL query results with support for stacked bar charts and multi-measure line charts.
 
 **Parameters:**
 
-- `data_source` (required): List of dictionaries (typically from `execute_sql_query`)
+- `data_source` (required): **MUST BE VALID JSON** - Array of objects (typically from `execute_sql_query`)
+  - ⚠️ **CRITICAL**: Send as actual JSON array with double quotes, NOT a string representation
+  - ✅ Correct: `[{"country": "USA", "count": 5}, {"country": "UK", "count": 3}]`
+  - ❌ Wrong: `"[{'country': 'USA', 'count': 5}]"` (string with single quotes)
 - `chart_type` (required): 'bar', 'line', 'scatter', or 'heatmap'
 - `x_column` (required): Column name for X-axis
 - `y_column` (optional): Column name(s) for Y-axis
@@ -596,7 +699,7 @@ result = execute_sql_query("SELECT month, revenue, expenses, profit FROM monthly
 generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'])
 ```
 
-#### 9. `get_server_info`
+#### 12. `get_server_info`
 
 Comprehensive server status and configuration information.
 
@@ -842,6 +945,22 @@ Users can confidently use all features documented in this README. The test failu
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📋 Recent Changes
+
+### Version 0.3.5
+
+**New Semantic Name Resolution Tools** (Nov 2025):
+
+- **`suggest_semantic_names`** - Extract and analyze ontology names to identify abbreviations and cryptic identifiers
+- **`apply_semantic_names`** - Apply LLM-suggested business-friendly names to ontology with `db:semanticName` and `db:businessDescription` annotations
+- **`load_my_ontology`** - Load custom .ttl ontology files from import folder for use as semantic context
+
+**Enhancements**:
+
+- Added `db:semanticName` and `db:businessDescription` annotations for enhanced business context
+- Automatic detection of cryptic naming patterns (abbreviations, suffixes like `_dt`, `_cd`, `_no`)
+- Server state management for loaded ontologies
+- Updated `execute_sql_query` to handle string boolean parameters from LLMs
+- Updated FastMCP dependency to 2.13.1
 
 ### Version 0.3.2
 

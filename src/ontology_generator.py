@@ -501,5 +501,344 @@ class OntologyGenerator:
         logger.info("Generating basic ontology (LLM enrichment handled by MCP tools)")
         return self.generate_from_schema(tables_info)
 
+    def extract_names_for_review(self) -> Dict[str, Any]:
+        """Extract all class, property, and relationship names from the ontology for LLM review.
+
+        This method analyzes the current ontology graph and extracts all names that might
+        need improvement - abbreviations, cryptic identifiers, or technical names that
+        could be made more business-friendly.
+
+        Returns:
+            Dictionary containing:
+            - classes: List of class info with original names, labels, and metadata
+            - properties: List of property info with original names and context
+            - relationships: List of relationship info
+            - analysis_hints: Patterns detected that suggest names need improvement
+        """
+        classes = []
+        properties = []
+        relationships = []
+        analysis_hints = []
+
+        # Extract classes (tables)
+        for subject in self.graph.subjects(RDF.type, OWL.Class):
+            if subject == OWL.Class:
+                continue
+
+            class_info = {
+                "uri": str(subject),
+                "local_name": str(subject).split("/")[-1] if "/" in str(subject) else str(subject),
+                "current_label": None,
+                "table_name": None,
+                "schema_name": None,
+                "row_count": None,
+                "comment": None
+            }
+
+            # Get current label
+            for label in self.graph.objects(subject, RDFS.label):
+                class_info["current_label"] = str(label)
+
+            # Get database annotations
+            for table_name in self.graph.objects(subject, self.db_ns.tableName):
+                class_info["table_name"] = str(table_name)
+            for schema_name in self.graph.objects(subject, self.db_ns.schemaName):
+                class_info["schema_name"] = str(schema_name)
+            for row_count in self.graph.objects(subject, self.db_ns.rowCount):
+                class_info["row_count"] = int(row_count)
+            for comment in self.graph.objects(subject, RDFS.comment):
+                class_info["comment"] = str(comment)
+
+            # Analyze if name looks cryptic
+            name = class_info["current_label"] or class_info["local_name"]
+            class_info["needs_review"] = self._analyze_name_quality(name)
+
+            classes.append(class_info)
+
+        # Extract data properties (columns)
+        for subject in self.graph.subjects(RDF.type, OWL.DatatypeProperty):
+            prop_info = {
+                "uri": str(subject),
+                "local_name": str(subject).split("/")[-1] if "/" in str(subject) else str(subject),
+                "current_label": None,
+                "column_name": None,
+                "table_name": None,
+                "sql_data_type": None,
+                "is_primary_key": False,
+                "is_foreign_key": False,
+                "comment": None
+            }
+
+            # Get current label
+            for label in self.graph.objects(subject, RDFS.label):
+                prop_info["current_label"] = str(label)
+
+            # Get database annotations
+            for col_name in self.graph.objects(subject, self.db_ns.columnName):
+                prop_info["column_name"] = str(col_name)
+            for table_name in self.graph.objects(subject, self.db_ns.tableName):
+                prop_info["table_name"] = str(table_name)
+            for sql_type in self.graph.objects(subject, self.db_ns.sqlDataType):
+                prop_info["sql_data_type"] = str(sql_type)
+            for is_pk in self.graph.objects(subject, self.db_ns.isPrimaryKey):
+                prop_info["is_primary_key"] = str(is_pk).lower() == "true"
+            for is_fk in self.graph.objects(subject, self.db_ns.isForeignKey):
+                prop_info["is_foreign_key"] = str(is_fk).lower() == "true"
+            for comment in self.graph.objects(subject, RDFS.comment):
+                prop_info["comment"] = str(comment)
+
+            # Analyze if name looks cryptic
+            name = prop_info["current_label"] or prop_info["local_name"]
+            prop_info["needs_review"] = self._analyze_name_quality(name)
+
+            properties.append(prop_info)
+
+        # Extract object properties (relationships)
+        for subject in self.graph.subjects(RDF.type, OWL.ObjectProperty):
+            rel_info = {
+                "uri": str(subject),
+                "local_name": str(subject).split("/")[-1] if "/" in str(subject) else str(subject),
+                "current_label": None,
+                "foreign_key_column": None,
+                "referenced_table": None,
+                "relationship_type": None,
+                "comment": None
+            }
+
+            # Get current label
+            for label in self.graph.objects(subject, RDFS.label):
+                rel_info["current_label"] = str(label)
+
+            # Get database annotations
+            for fk_col in self.graph.objects(subject, self.db_ns.foreignKeyColumn):
+                rel_info["foreign_key_column"] = str(fk_col)
+            for ref_table in self.graph.objects(subject, self.db_ns.referencedTable):
+                rel_info["referenced_table"] = str(ref_table)
+            for rel_type in self.graph.objects(subject, self.db_ns.relationshipType):
+                rel_info["relationship_type"] = str(rel_type)
+            for comment in self.graph.objects(subject, RDFS.comment):
+                rel_info["comment"] = str(comment)
+
+            # Analyze if name looks cryptic
+            name = rel_info["current_label"] or rel_info["local_name"]
+            rel_info["needs_review"] = self._analyze_name_quality(name)
+
+            relationships.append(rel_info)
+
+        # Generate analysis hints
+        cryptic_classes = [c for c in classes if c.get("needs_review", {}).get("is_cryptic")]
+        cryptic_props = [p for p in properties if p.get("needs_review", {}).get("is_cryptic")]
+        cryptic_rels = [r for r in relationships if r.get("needs_review", {}).get("is_cryptic")]
+
+        if cryptic_classes:
+            analysis_hints.append(f"Found {len(cryptic_classes)} class names that may need improvement")
+        if cryptic_props:
+            analysis_hints.append(f"Found {len(cryptic_props)} property names that may need improvement")
+        if cryptic_rels:
+            analysis_hints.append(f"Found {len(cryptic_rels)} relationship names that may need improvement")
+
+        return {
+            "classes": classes,
+            "properties": properties,
+            "relationships": relationships,
+            "analysis_hints": analysis_hints,
+            "summary": {
+                "total_classes": len(classes),
+                "total_properties": len(properties),
+                "total_relationships": len(relationships),
+                "classes_needing_review": len(cryptic_classes),
+                "properties_needing_review": len(cryptic_props),
+                "relationships_needing_review": len(cryptic_rels)
+            }
+        }
+
+    def _analyze_name_quality(self, name: str) -> Dict[str, Any]:
+        """Analyze if a name looks like an abbreviation or cryptic identifier.
+
+        Args:
+            name: The name to analyze
+
+        Returns:
+            Dictionary with analysis results
+        """
+        if not name:
+            return {"is_cryptic": True, "reasons": ["Empty name"]}
+
+        reasons = []
+        is_cryptic = False
+
+        # Check for very short names (likely abbreviations)
+        if len(name) <= 3:
+            is_cryptic = True
+            reasons.append("Very short name (≤3 chars) - likely abbreviation")
+
+        # Check for all uppercase (common for abbreviations)
+        if name.isupper() and len(name) > 1:
+            is_cryptic = True
+            reasons.append("All uppercase - likely acronym")
+
+        # Check for underscore-separated abbreviations (e.g., cust_id, ord_dt)
+        parts = name.split("_")
+        short_parts = [p for p in parts if len(p) <= 3 and p.isalpha()]
+        if len(short_parts) > len(parts) / 2:
+            is_cryptic = True
+            reasons.append("Contains multiple abbreviations")
+
+        # Check for common cryptic patterns
+        cryptic_patterns = [
+            (r"_id$", "Ends with '_id' - consider more descriptive name"),
+            (r"_dt$", "Ends with '_dt' (date abbreviation)"),
+            (r"_cd$", "Ends with '_cd' (code abbreviation)"),
+            (r"_no$", "Ends with '_no' (number abbreviation)"),
+            (r"_nm$", "Ends with '_nm' (name abbreviation)"),
+            (r"_amt$", "Ends with '_amt' (amount abbreviation)"),
+            (r"_qty$", "Ends with '_qty' (quantity abbreviation)"),
+            (r"_flg$", "Ends with '_flg' (flag abbreviation)"),
+            (r"_ind$", "Ends with '_ind' (indicator abbreviation)"),
+            (r"_num$", "Ends with '_num' (number abbreviation)"),
+            (r"_cnt$", "Ends with '_cnt' (count abbreviation)"),
+            (r"_desc$", "Ends with '_desc' (description abbreviation)"),
+            (r"_typ$", "Ends with '_typ' (type abbreviation)"),
+            (r"_cat$", "Ends with '_cat' (category abbreviation)"),
+            (r"_sts$", "Ends with '_sts' (status abbreviation)"),
+            (r"^pk_", "Starts with 'pk_' (primary key prefix)"),
+            (r"^fk_", "Starts with 'fk_' (foreign key prefix)"),
+            (r"^tbl_", "Starts with 'tbl_' (table prefix)"),
+            (r"^vw_", "Starts with 'vw_' (view prefix)"),
+        ]
+
+        for pattern, reason in cryptic_patterns:
+            if re.search(pattern, name.lower()):
+                is_cryptic = True
+                reasons.append(reason)
+
+        # Check for numeric suffixes that might indicate versions or partitions
+        if re.search(r"\d+$", name):
+            reasons.append("Contains numeric suffix")
+
+        # Check for mixed case that looks like system-generated names
+        if re.match(r"^[a-z]+[A-Z]", name) and "_" not in name:
+            # camelCase is OK, but some system names are cryptic camelCase
+            pass
+
+        return {
+            "is_cryptic": is_cryptic,
+            "reasons": reasons,
+            "confidence": "high" if len(reasons) >= 2 else "medium" if len(reasons) == 1 else "low"
+        }
+
+    def apply_semantic_names(self, name_suggestions: Dict[str, Any]) -> str:
+        """Apply suggested semantic names to the ontology.
+
+        This method takes LLM-generated name suggestions and updates the ontology
+        labels to use more business-friendly terminology.
+
+        Args:
+            name_suggestions: Dictionary containing:
+                - classes: List of {original_name, suggested_name, description}
+                - properties: List of {original_name, suggested_name, description}
+                - relationships: List of {original_name, suggested_name, description}
+
+        Returns:
+            Updated ontology in Turtle format
+        """
+        logger.info("Applying semantic name suggestions to ontology")
+        changes_made = 0
+
+        # Apply class name suggestions
+        if "classes" in name_suggestions:
+            for suggestion in name_suggestions["classes"]:
+                original = suggestion.get("original_name")
+                suggested = suggestion.get("suggested_name")
+                description = suggestion.get("description")
+
+                if not original:
+                    continue
+
+                # Find the class URI
+                class_uri = self.base_uri[self._clean_name(original)]
+
+                # Check if this class exists
+                if (class_uri, RDF.type, OWL.Class) in self.graph:
+                    if suggested:
+                        # Update the label
+                        self.graph.remove((class_uri, RDFS.label, None))
+                        self.graph.add((class_uri, RDFS.label, Literal(suggested)))
+                        # Also add a semantic name annotation
+                        self.graph.add((class_uri, self.db_ns.semanticName, Literal(suggested)))
+                        changes_made += 1
+
+                    if description:
+                        # Add or update description
+                        self.graph.remove((class_uri, self.db_ns.businessDescription, None))
+                        self.graph.add((class_uri, self.db_ns.businessDescription, Literal(description)))
+
+        # Apply property name suggestions
+        if "properties" in name_suggestions:
+            for suggestion in name_suggestions["properties"]:
+                original = suggestion.get("original_name")
+                suggested = suggestion.get("suggested_name")
+                description = suggestion.get("description")
+                table_name = suggestion.get("table_name")
+
+                if not original:
+                    continue
+
+                # Find the property URI - might need table context
+                if table_name:
+                    prop_name = f"{self._clean_name(table_name)}_{self._clean_name(original)}"
+                else:
+                    prop_name = self._clean_name(original)
+
+                prop_uri = self.base_uri[prop_name]
+
+                # Check if this property exists (as data or object property)
+                if ((prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph or
+                    (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph):
+                    if suggested:
+                        # Update the label
+                        self.graph.remove((prop_uri, RDFS.label, None))
+                        self.graph.add((prop_uri, RDFS.label, Literal(suggested)))
+                        # Also add a semantic name annotation
+                        self.graph.add((prop_uri, self.db_ns.semanticName, Literal(suggested)))
+                        changes_made += 1
+
+                    if description:
+                        # Add or update description
+                        self.graph.remove((prop_uri, self.db_ns.businessDescription, None))
+                        self.graph.add((prop_uri, self.db_ns.businessDescription, Literal(description)))
+
+        # Apply relationship name suggestions
+        if "relationships" in name_suggestions:
+            for suggestion in name_suggestions["relationships"]:
+                original = suggestion.get("original_name")
+                suggested = suggestion.get("suggested_name")
+                description = suggestion.get("description")
+
+                if not original:
+                    continue
+
+                # Find the relationship URI
+                rel_uri = self.base_uri[self._clean_name(original)]
+
+                # Check if this relationship exists
+                if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
+                    if suggested:
+                        # Update the label
+                        self.graph.remove((rel_uri, RDFS.label, None))
+                        self.graph.add((rel_uri, RDFS.label, Literal(suggested)))
+                        # Also add a semantic name annotation
+                        self.graph.add((rel_uri, self.db_ns.semanticName, Literal(suggested)))
+                        changes_made += 1
+
+                    if description:
+                        # Add or update description
+                        self.graph.remove((rel_uri, self.db_ns.businessDescription, None))
+                        self.graph.add((rel_uri, self.db_ns.businessDescription, Literal(description)))
+
+        logger.info(f"Applied {changes_made} semantic name changes to ontology")
+
+        return self.graph.serialize(format="turtle")
+
 
 

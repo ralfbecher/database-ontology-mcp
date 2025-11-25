@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-semantic-layer"
-version = "0.3.4"
+version = "0.3.5"
 description = "Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience"
 authors = [
     {name = "Ralf Becher", email = "ralf.becher@web.de"}
@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     # Core MCP Framework - latest version
-    "fastmcp>=2.13.0.2",
+    "fastmcp>=2.13.1",
     # Database connectivity - latest versions
     "sqlalchemy>=2.0.25",
     "psycopg2-binary>=2.9.9",

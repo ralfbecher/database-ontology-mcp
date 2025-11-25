@@ -331,28 +331,49 @@ analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_s
 
 class ServerState:
     """Manages server state and dependencies."""
-    
+
     def __init__(self):
         self._db_manager: Optional[DatabaseManager] = None
         self._ontology_generator: Optional[OntologyGenerator] = None
-    
+        self._loaded_ontology: Optional[str] = None  # Loaded ontology TTL content
+        self._loaded_ontology_path: Optional[str] = None  # Path to loaded ontology file
+
     def get_db_manager(self) -> DatabaseManager:
         """Get or create database manager instance."""
         if self._db_manager is None:
             self._db_manager = DatabaseManager()
         return self._db_manager
-    
+
     def get_ontology_generator(self, base_uri: str = "http://example.com/ontology/") -> OntologyGenerator:
         """Get ontology generator instance."""
         # Always create new instance to avoid state pollution
         return OntologyGenerator(base_uri=base_uri)
-    
+
+    def set_loaded_ontology(self, ontology_ttl: str, file_path: str):
+        """Store a loaded ontology for use in context."""
+        self._loaded_ontology = ontology_ttl
+        self._loaded_ontology_path = file_path
+
+    def get_loaded_ontology(self) -> Optional[str]:
+        """Get the currently loaded ontology TTL content."""
+        return self._loaded_ontology
+
+    def get_loaded_ontology_path(self) -> Optional[str]:
+        """Get the path to the currently loaded ontology file."""
+        return self._loaded_ontology_path
+
+    def has_loaded_ontology(self) -> bool:
+        """Check if an ontology has been loaded."""
+        return self._loaded_ontology is not None
+
     def cleanup(self):
         """Clean up resources."""
         if self._db_manager:
             self._db_manager.disconnect()
             self._db_manager = None
         self._ontology_generator = None
+        self._loaded_ontology = None
+        self._loaded_ontology_path = None
 
 # Global server state
 _server_state = ServerState()
@@ -797,16 +818,547 @@ async def generate_ontology(
         logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
         logger.info(f"Saved ontology to: {ontology_file_path}")
 
-        await ctx.info(f"Ontology generation complete; next call should be validate_sql_syntax or execute_sql_query")
+        await ctx.info(f"Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names")
 
-        # Return both the ontology and file path info
-        return f"{ontology_ttl}\n\n# Ontology saved to: {ontology_file_path}"
+        # Analyze the ontology for cryptic names
+        generator = _server_state.get_ontology_generator(base_uri=base_uri)
+        generator.graph.parse(data=ontology_ttl, format="turtle")
+        # Re-bind namespaces after parsing
+        generator.graph.bind("ns", generator.base_uri)
+        generator.graph.bind("db", generator.db_ns)
+        name_analysis = generator.extract_names_for_review()
+
+        # Build result with guidance
+        result = ontology_ttl
+        result += f"\n\n# Ontology saved to: {ontology_file_path}"
+
+        # Add semantic name resolution guidance if cryptic names detected
+        cryptic_count = (name_analysis["summary"]["classes_needing_review"] +
+                        name_analysis["summary"]["properties_needing_review"] +
+                        name_analysis["summary"]["relationships_needing_review"])
+
+        if cryptic_count > 0:
+            result += f"\n\n# ⚠️ SEMANTIC NAME RESOLUTION RECOMMENDED"
+            result += f"\n# Found {cryptic_count} names that may be abbreviations or cryptic identifiers."
+            result += f"\n# To improve ontology readability for business users:"
+            result += f"\n# 1. Call suggest_semantic_names() to extract names for review"
+            result += f"\n# 2. Review the suggestions and provide business-friendly alternatives"
+            result += f"\n# 3. Call apply_semantic_names() with your suggestions"
+            result += f"\n#"
+            result += f"\n# Analysis summary:"
+            result += f"\n#   - Classes needing review: {name_analysis['summary']['classes_needing_review']}"
+            result += f"\n#   - Properties needing review: {name_analysis['summary']['properties_needing_review']}"
+            result += f"\n#   - Relationships needing review: {name_analysis['summary']['relationships_needing_review']}"
+
+        return result
 
     except Exception as e:
         logger.warning(f"Failed to save ontology to file: {e}")
-        await ctx.info(f"Ontology file save failed but ontology generated; next call should be validate_sql_syntax or execute_sql_query")
+        await ctx.info(f"Ontology file save failed but ontology generated; next call should be suggest_semantic_names to improve cryptic names")
         # Still return the ontology even if file save failed
         return ontology_ttl
+
+
+@mcp.tool()
+async def suggest_semantic_names(
+    ctx: Context,
+    ontology_ttl: Optional[str] = None,
+    schema_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
+
+    This tool analyzes an ontology (either from a previous generate_ontology call or from the
+    connected database) and returns a structured list of all class, property, and relationship
+    names along with analysis of which ones appear to be abbreviations or cryptic identifiers.
+
+    ## PURPOSE
+
+    Since MCP Sampling is not available in Claude Desktop, this tool enables a two-step workflow:
+    1. Call this tool to extract names that need improvement
+    2. Review the results and provide suggested business-friendly names
+    3. Call apply_semantic_names with your suggestions
+
+    ## WORKFLOW
+
+    After calling generate_ontology():
+    ```
+    1. suggest_semantic_names() → Returns list of names needing review
+    2. LLM analyzes names and generates suggestions
+    3. apply_semantic_names(suggestions) → Updates ontology with better names
+    ```
+
+    ## NAME ANALYSIS
+
+    The tool automatically detects:
+    - **Abbreviations**: Short names like 'cust', 'ord', 'amt', 'qty'
+    - **Cryptic suffixes**: '_id', '_dt', '_cd', '_no', '_nm', '_flg'
+    - **Technical prefixes**: 'pk_', 'fk_', 'tbl_', 'vw_'
+    - **All-caps acronyms**: 'SKU', 'UPC', 'EAN'
+    - **Numeric suffixes**: Names ending in numbers
+
+    ## OUTPUT FORMAT
+
+    Returns a dictionary with:
+    - classes: List of table/class names with analysis
+    - properties: List of column/property names with analysis
+    - relationships: List of foreign key relationships with analysis
+    - analysis_hints: Summary of detected issues
+    - llm_prompt: Instructions for generating name suggestions
+
+    Args:
+        ontology_ttl: Optional Turtle format ontology string. If not provided,
+                     will use the most recently generated ontology from the server state.
+        schema_name: Optional schema name to regenerate ontology from database.
+                    Only used if ontology_ttl is not provided.
+
+    Returns:
+        Dictionary containing extracted names, analysis results, and instructions
+        for providing semantic name suggestions.
+
+    Example Response Format for LLM to provide suggestions:
+    ```json
+    {
+        "classes": [
+            {"original_name": "cust_mstr", "suggested_name": "Customer", "description": "Master record for customer entities"}
+        ],
+        "properties": [
+            {"original_name": "ord_dt", "table_name": "orders", "suggested_name": "Order Date", "description": "Date when order was placed"}
+        ],
+        "relationships": [
+            {"original_name": "orders_has_customers", "suggested_name": "Placed By Customer", "description": "Links order to the customer who placed it"}
+        ]
+    }
+    ```
+    """
+    try:
+        generator = None
+
+        if ontology_ttl:
+            # Parse the provided ontology
+            from rdflib import Graph
+            generator = _server_state.get_ontology_generator()
+            generator.graph = Graph()
+            generator.graph.parse(data=ontology_ttl, format="turtle")
+            # Re-bind namespaces after parsing
+            generator.graph.bind("ns", generator.base_uri)
+            generator.graph.bind("db", generator.db_ns)
+        else:
+            # Try to generate from database
+            db_manager = _server_state.get_db_manager()
+
+            if not db_manager.has_engine():
+                return {
+                    "error": "No ontology provided and no database connection. Please either provide ontology_ttl parameter or connect to database first.",
+                    "error_type": "validation_error"
+                }
+
+            # Generate fresh ontology from database
+            tables = db_manager.get_tables(schema_name)
+            tables_info = []
+            for table_name in tables:
+                table_info = db_manager.analyze_table(table_name, schema_name)
+                if table_info:
+                    tables_info.append(table_info)
+
+            if not tables_info:
+                return {
+                    "error": f"No tables found in schema '{schema_name or 'default'}'",
+                    "error_type": "data_error"
+                }
+
+            generator = _server_state.get_ontology_generator()
+            generator.generate_from_schema(tables_info)
+
+        # Extract names for review
+        extraction_result = generator.extract_names_for_review()
+
+        # Add LLM prompt instructions
+        extraction_result["llm_instructions"] = {
+            "task": "Review the extracted names and provide business-friendly alternatives",
+            "focus_on": [
+                "Names marked with 'needs_review.is_cryptic: true'",
+                "Abbreviations that should be expanded",
+                "Technical names that need business context"
+            ],
+            "response_format": {
+                "classes": [
+                    {"original_name": "string", "suggested_name": "string", "description": "string"}
+                ],
+                "properties": [
+                    {"original_name": "string", "table_name": "string", "suggested_name": "string", "description": "string"}
+                ],
+                "relationships": [
+                    {"original_name": "string", "suggested_name": "string", "description": "string"}
+                ]
+            },
+            "guidelines": [
+                "Use clear, business-oriented terminology",
+                "Expand abbreviations to full words (e.g., 'cust' → 'Customer')",
+                "Use Title Case for class names",
+                "Use descriptive phrases for properties",
+                "Provide meaningful descriptions that explain business context",
+                "Keep the original db:tableName and db:columnName for SQL generation"
+            ]
+        }
+
+        # Add next step guidance
+        extraction_result["next_step"] = "Review the names above and call apply_semantic_names with your suggestions"
+        extraction_result["next_tool"] = "apply_semantic_names"
+
+        await ctx.info(f"Extracted {extraction_result['summary']['total_classes']} classes, {extraction_result['summary']['total_properties']} properties for review; next call should be apply_semantic_names with your suggestions")
+
+        return extraction_result
+
+    except Exception as e:
+        logger.error(f"Error extracting names for review: {e}")
+        return {
+            "error": f"Failed to extract names: {str(e)}",
+            "error_type": "internal_error"
+        }
+
+
+@mcp.tool()
+async def apply_semantic_names(
+    ctx: Context,
+    suggestions: str,
+    schema_name: Optional[str] = None,
+    save_to_file: bool = True
+) -> str:
+    """Apply LLM-suggested semantic names to the ontology.
+
+    This tool takes name suggestions generated by the LLM (after calling suggest_semantic_names)
+    and applies them to the ontology, updating labels and adding business descriptions.
+
+    ## PURPOSE
+
+    Completes the semantic name resolution workflow:
+    1. generate_ontology() → Creates initial ontology with database names
+    2. suggest_semantic_names() → Extracts names for LLM review
+    3. apply_semantic_names() → Applies LLM suggestions to ontology
+
+    ## WHAT GETS UPDATED
+
+    For each suggestion, the tool will:
+    - Update rdfs:label to the suggested business-friendly name
+    - Add db:semanticName annotation with the new name
+    - Add db:businessDescription with the provided description
+    - Preserve original db:tableName/db:columnName for SQL generation
+
+    ## IMPORTANT
+
+    The original database identifiers (db:tableName, db:columnName) are preserved
+    so that SQL generation continues to work correctly. The semantic names are
+    used for business understanding and documentation.
+
+    Args:
+        suggestions: JSON string containing name suggestions in the format:
+            {
+                "classes": [{"original_name": "...", "suggested_name": "...", "description": "..."}],
+                "properties": [{"original_name": "...", "table_name": "...", "suggested_name": "...", "description": "..."}],
+                "relationships": [{"original_name": "...", "suggested_name": "...", "description": "..."}]
+            }
+        schema_name: Optional schema name to regenerate ontology from database before applying.
+        save_to_file: Whether to save the updated ontology to a file (default: True)
+
+    Returns:
+        Updated ontology in Turtle format with semantic names applied.
+
+    Example suggestions format:
+    ```json
+    {
+        "classes": [
+            {"original_name": "cust_mstr", "suggested_name": "Customer Master", "description": "Central repository of customer information"},
+            {"original_name": "ord_hdr", "suggested_name": "Order Header", "description": "Main order record with summary information"}
+        ],
+        "properties": [
+            {"original_name": "cust_id", "table_name": "cust_mstr", "suggested_name": "Customer ID", "description": "Unique identifier for customers"},
+            {"original_name": "ord_dt", "table_name": "ord_hdr", "suggested_name": "Order Date", "description": "Date when the order was placed"}
+        ],
+        "relationships": [
+            {"original_name": "ord_hdr_has_cust_mstr", "suggested_name": "Placed By", "description": "Links an order to the customer who placed it"}
+        ]
+    }
+    ```
+    """
+    try:
+        import json
+
+        # Parse suggestions
+        try:
+            if isinstance(suggestions, str):
+                name_suggestions = json.loads(suggestions)
+            else:
+                name_suggestions = suggestions
+        except json.JSONDecodeError as e:
+            return create_error_response(
+                f"Invalid JSON in suggestions parameter: {str(e)}",
+                "parameter_error",
+                "Ensure suggestions is valid JSON with classes, properties, and relationships arrays"
+            )
+
+        # Validate structure
+        if not isinstance(name_suggestions, dict):
+            return create_error_response(
+                "Suggestions must be a JSON object with 'classes', 'properties', and/or 'relationships' arrays",
+                "parameter_error"
+            )
+
+        # Get or create ontology generator with existing graph
+        db_manager = _server_state.get_db_manager()
+
+        if not db_manager.has_engine():
+            return create_error_response(
+                "No database connection established. Please use connect_database tool first.",
+                "connection_error"
+            )
+
+        # Generate fresh ontology from database
+        tables = db_manager.get_tables(schema_name)
+        tables_info = []
+        for table_name in tables:
+            table_info = db_manager.analyze_table(table_name, schema_name)
+            if table_info:
+                tables_info.append(table_info)
+
+        if not tables_info:
+            return create_error_response(
+                f"No tables found in schema '{schema_name or 'default'}'",
+                "data_error"
+            )
+
+        generator = _server_state.get_ontology_generator()
+        generator.generate_from_schema(tables_info)
+
+        # Apply the semantic names
+        updated_ontology = generator.apply_semantic_names(name_suggestions)
+
+        # Save to file if requested
+        ontology_file_path = None
+        if save_to_file:
+            try:
+                TMP_DIR = Path(__file__).parent.parent / "tmp"
+                TMP_DIR.mkdir(exist_ok=True)
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
+                ontology_filename = f"ontology_{schema_safe}_semantic_{timestamp}.ttl"
+                ontology_file_path = TMP_DIR / ontology_filename
+
+                with open(ontology_file_path, 'w', encoding='utf-8') as f:
+                    f.write(updated_ontology)
+
+                logger.info(f"Saved semantic ontology to: {ontology_file_path}")
+
+            except Exception as e:
+                logger.warning(f"Failed to save ontology to file: {e}")
+
+        # Count changes made
+        classes_updated = len(name_suggestions.get("classes", []))
+        properties_updated = len(name_suggestions.get("properties", []))
+        relationships_updated = len(name_suggestions.get("relationships", []))
+        total_updated = classes_updated + properties_updated + relationships_updated
+
+        await ctx.info(f"Applied {total_updated} semantic name changes to ontology")
+
+        result = f"# Semantic Names Applied Successfully\n\n"
+        result += f"- Classes updated: {classes_updated}\n"
+        result += f"- Properties updated: {properties_updated}\n"
+        result += f"- Relationships updated: {relationships_updated}\n"
+
+        if ontology_file_path:
+            result += f"\n# Ontology saved to: {ontology_file_path}\n"
+
+        result += f"\n{updated_ontology}"
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error applying semantic names: {e}")
+        return create_error_response(
+            f"Failed to apply semantic names: {str(e)}",
+            "internal_error"
+        )
+
+
+@mcp.tool()
+async def load_my_ontology(
+    ctx: Context,
+    import_folder: str = "./import"
+) -> Dict[str, Any]:
+    """Load the newest .ttl ontology file from the import folder to use in context.
+
+    This tool allows you to load a custom ontology file instead of generating one
+    from the database schema. The loaded ontology will be used as the semantic
+    context for subsequent operations like SQL generation and validation.
+
+    ## PURPOSE
+
+    Use this tool when you have a pre-existing ontology that should be used
+    instead of auto-generating one from the database schema. This is useful for:
+    - Using manually curated ontologies with business-friendly naming
+    - Loading previously generated and refined ontologies
+    - Working with ontologies that have been enhanced externally
+    - Reusing ontologies across multiple sessions
+
+    ## BEHAVIOR
+
+    The tool will:
+    1. Scan the specified import folder for .ttl (Turtle) files
+    2. Select the newest file based on modification time
+    3. Parse and validate the ontology
+    4. Store it in server state for use in subsequent operations
+    5. Return information about the loaded ontology
+
+    ## FILE FORMAT
+
+    The ontology file must be in Turtle (.ttl) format and should follow
+    the RDF/OWL structure with:
+    - owl:Class definitions for tables
+    - owl:DatatypeProperty definitions for columns
+    - owl:ObjectProperty definitions for relationships
+    - db: namespace annotations for SQL mapping
+
+    Args:
+        import_folder: Path to the folder containing .ttl files (default: "./import")
+                      Can be relative or absolute path.
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating if ontology was loaded
+        - file_path: Path to the loaded file
+        - file_name: Name of the loaded file
+        - file_size: Size of the file in bytes
+        - modified_time: Last modification time of the file
+        - classes_count: Number of OWL classes found
+        - properties_count: Number of properties found
+        - relationships_count: Number of object properties found
+        - ontology_preview: First 2000 characters of the ontology
+        - next_steps: Guidance for what to do next
+
+    Example Usage:
+        # Load ontology from default import folder
+        load_my_ontology()
+
+        # Load from custom folder
+        load_my_ontology(import_folder="/path/to/my/ontologies")
+
+    After Loading:
+        The loaded ontology is stored in server state and will be available
+        for reference during SQL generation and other semantic operations.
+        You can view the full ontology content from the returned preview
+        or by reading the file directly.
+    """
+    try:
+        import glob
+        from rdflib import Graph
+        from rdflib.namespace import RDF, OWL
+
+        # Resolve the import folder path
+        if import_folder.startswith("./"):
+            # Relative path - resolve from project root
+            project_root = Path(__file__).parent.parent
+            folder_path = project_root / import_folder[2:]
+        elif not os.path.isabs(import_folder):
+            # Relative path without ./
+            project_root = Path(__file__).parent.parent
+            folder_path = project_root / import_folder
+        else:
+            folder_path = Path(import_folder)
+
+        # Check if folder exists
+        if not folder_path.exists():
+            return {
+                "success": False,
+                "error": f"Import folder not found: {folder_path}",
+                "error_type": "folder_not_found",
+                "suggestion": "Create the folder and add .ttl files, or specify a different path"
+            }
+
+        # Find all .ttl files in the folder
+        ttl_files = list(folder_path.glob("*.ttl"))
+
+        if not ttl_files:
+            return {
+                "success": False,
+                "error": f"No .ttl files found in: {folder_path}",
+                "error_type": "no_files_found",
+                "suggestion": "Add .ttl ontology files to the import folder"
+            }
+
+        # Sort by modification time (newest first)
+        ttl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        newest_file = ttl_files[0]
+
+        # Read the file content
+        with open(newest_file, 'r', encoding='utf-8') as f:
+            ontology_content = f.read()
+
+        # Parse and validate the ontology
+        graph = Graph()
+        try:
+            graph.parse(data=ontology_content, format="turtle")
+        except Exception as parse_error:
+            return {
+                "success": False,
+                "error": f"Failed to parse ontology file: {str(parse_error)}",
+                "error_type": "parse_error",
+                "file_path": str(newest_file),
+                "suggestion": "Ensure the file is valid Turtle format"
+            }
+
+        # Count ontology elements
+        classes_count = len(list(graph.subjects(RDF.type, OWL.Class)))
+        datatype_props = len(list(graph.subjects(RDF.type, OWL.DatatypeProperty)))
+        object_props = len(list(graph.subjects(RDF.type, OWL.ObjectProperty)))
+
+        # Get file stats
+        file_stat = newest_file.stat()
+        modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Store the loaded ontology in server state
+        _server_state.set_loaded_ontology(ontology_content, str(newest_file))
+
+        logger.info(f"Loaded ontology from: {newest_file}")
+        logger.info(f"Ontology contains: {classes_count} classes, {datatype_props} data properties, {object_props} object properties")
+
+        await ctx.info(f"Ontology loaded successfully with {classes_count} classes; ready for SQL generation")
+
+        # Prepare preview (first 2000 chars)
+        preview = ontology_content[:2000]
+        if len(ontology_content) > 2000:
+            preview += "\n\n... [truncated, full content available in file]"
+
+        return {
+            "success": True,
+            "file_path": str(newest_file),
+            "file_name": newest_file.name,
+            "file_size": file_stat.st_size,
+            "modified_time": modified_time,
+            "classes_count": classes_count,
+            "properties_count": datatype_props,
+            "relationships_count": object_props,
+            "total_files_found": len(ttl_files),
+            "other_files": [f.name for f in ttl_files[1:5]] if len(ttl_files) > 1 else [],
+            "ontology_preview": preview,
+            "next_steps": {
+                "recommended": "execute_sql_query",
+                "reason": "The loaded ontology provides semantic context for SQL generation",
+                "workflow": [
+                    "1. ✅ load_my_ontology (completed)",
+                    "2. ➡️  connect_database (if not already connected)",
+                    "3. ➡️  execute_sql_query (use ontology context for accurate SQL)"
+                ]
+            },
+            "note": "This ontology is now active and will be used instead of auto-generated ontologies"
+        }
+
+    except Exception as e:
+        logger.error(f"Error loading ontology: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to load ontology: {str(e)}",
+            "error_type": "internal_error"
+        }
 
 
 @mcp.tool()
@@ -1287,10 +1839,11 @@ async def execute_sql_query(
         limit: Maximum number of rows to return (default: 1000, max: 10000).
               This prevents memory exhaustion from large result sets while allowing
               comprehensive data analysis.
-        checklist_completed: Boolean flag confirming that the pre-execution checklist has been
-                           completed (default: False). This includes relationship analysis,
-                           fan-trap detection, and safe pattern selection. Must be set to True
-                           to execute queries.
+        checklist_completed: Boolean flag (true/false, NOT "True"/"False" strings) confirming
+                           that the pre-execution checklist has been completed (default: false).
+                           This includes relationship analysis, fan-trap detection, and safe
+                           pattern selection. Must be set to true to execute queries.
+                           Type: boolean (not string)
 
     Returns:
         Dictionary containing:
@@ -1341,15 +1894,19 @@ async def execute_sql_query(
         - Query plans are cached for repeated similar queries
     """
     try:
+        # Handle string "True"/"False" from LLMs that send strings instead of booleans
+        if isinstance(checklist_completed, str):
+            checklist_completed = checklist_completed.lower() in ('true', '1', 'yes')
+
         db_manager = _server_state.get_db_manager()
-        
+
         if not db_manager.has_engine():
             return create_error_response(
                 "No database connection established. Please use connect_database tool first to establish a connection to PostgreSQL, Snowflake, or Dremio.",
                 "connection_error",
                 "Available connection methods: connect_database('postgresql'), connect_database('snowflake'), connect_database('dremio')"
             )
-        
+
         # Validate limit parameter
         if limit <= 0 or limit > 10000:
             return create_error_response(
@@ -1404,7 +1961,7 @@ async def execute_sql_query(
 @mcp.tool()
 async def generate_chart(
     ctx: Context,
-    data_source: List[Dict[str, Any]],
+    data_source: Union[List[Dict[str, Any]], str],
     chart_type: str,
     x_column: str,
     y_column: Optional[Union[str, List[str]]] = None,
@@ -1418,6 +1975,9 @@ async def generate_chart(
     sort_order: Optional[str] = None
 ) -> Image:
     """Generate interactive charts from SQL query results or data analysis.
+
+    ⚠️ IMPORTANT: data_source parameter MUST be valid JSON (array of objects with double quotes)
+    NOT a string representation with single quotes. See Args section for correct format.
 
     📊 VISUALIZATION CAPABILITIES:
     This tool creates professional data visualizations directly in Claude Desktop,
@@ -1462,7 +2022,19 @@ async def generate_chart(
     - Automatic type detection
 
     Args:
-        data_source: List of dictionaries containing the data to visualize.
+        data_source: **MUST BE VALID JSON** - Array of objects containing the data to visualize.
+                    ⚠️ CRITICAL: Send as actual JSON array with double quotes, NOT a string representation.
+
+                    ✅ CORRECT FORMAT (JSON):
+                    [
+                      {"country": "USA", "customer_count": 5},
+                      {"country": "Germany", "customer_count": 3},
+                      {"country": "UK", "customer_count": 4}
+                    ]
+
+                    ❌ WRONG FORMAT (String with single quotes):
+                    "[{'country': 'USA', 'customer_count': 5}, ...]"
+
                     Typically the 'data' field from execute_sql_query results.
         chart_type: Type of chart - 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis (required)
@@ -1493,6 +2065,20 @@ async def generate_chart(
         # 1. Simple bar chart from query results
         result = execute_sql_query("SELECT public.orders.category, SUM(public.orders.sales) as total FROM public.orders GROUP BY public.orders.category")
         generate_chart(result['data'], 'bar', 'category', 'total')
+
+        # Example with explicit JSON format (what data_source should look like):
+        generate_chart(
+            data_source=[
+                {"country": "USA", "customer_count": 5},
+                {"country": "Germany", "customer_count": 3},
+                {"country": "UK", "customer_count": 4},
+                {"country": "France", "customer_count": 2},
+                {"country": "Japan", "customer_count": 1}
+            ],
+            chart_type="bar",
+            x_column="country",
+            y_column="customer_count"
+        )
 
         # 2. Stacked bar chart with two dimensions
         result = execute_sql_query(\"\"\"
@@ -1554,6 +2140,34 @@ async def generate_chart(
     # Import the implementation from tools module
     from .tools.chart import generate_chart as generate_chart_impl
     import json
+
+    # FALLBACK: Parse data_source if it's incorrectly sent as a string
+    # (documentation specifies it should be actual JSON, but some LLMs might send strings)
+    if data_source and isinstance(data_source, str):
+        logger.warning("data_source was sent as string instead of JSON array - attempting to parse")
+        try:
+            # First try JSON parsing (double quotes)
+            parsed = json.loads(data_source)
+            if isinstance(parsed, list):
+                data_source = parsed
+                logger.info("Successfully parsed data_source from JSON string format")
+        except (json.JSONDecodeError, ValueError):
+            # If JSON fails, try Python literal_eval (single quotes)
+            try:
+                import ast
+                parsed = ast.literal_eval(data_source)
+                if isinstance(parsed, list):
+                    data_source = parsed
+                    logger.info("Successfully parsed data_source from Python literal string format")
+            except (ValueError, SyntaxError) as e:
+                # Could not parse - return clear error
+                await ctx.info("Chart generation failed - data_source format error")
+                raise RuntimeError(
+                    f"❌ data_source must be valid JSON (array of objects), not a string. "
+                    f"Received string: {data_source[:100]}... "
+                    f"Expected format: [{{'key': 'value'}}, ...] "
+                    f"Parse error: {str(e)}"
+                )
 
     # Parse y_column if it's a JSON string representation of a list
     # This handles cases where MCP passes ["col1", "col2"] as a string
@@ -1619,6 +2233,8 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
             "Schema analysis",
             "Table relationship mapping",
             "RDF/OWL ontology generation",
+            "Load custom ontologies from file",
+            "Semantic name resolution (abbreviation expansion)",
             "Interactive data visualization (charts)"
         ],
         "tools": [
@@ -1626,6 +2242,9 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
             "list_schemas",
             "analyze_schema",
             "generate_ontology",
+            "suggest_semantic_names",
+            "apply_semantic_names",
+            "load_my_ontology",
             "sample_table_data",
             "validate_sql_syntax",
             "execute_sql_query",

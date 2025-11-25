@@ -39,11 +39,15 @@ def execute_sql_query(
 ) -> Dict[str, Any]:
     """Execute SQL query implementation. Full documentation in main.py."""
     try:
+        # Handle string "True"/"False" from LLMs that send strings instead of booleans
+        if isinstance(checklist_completed, str):
+            checklist_completed = checklist_completed.lower() in ('true', '1', 'yes')
+
         db_manager = get_db_manager()
-        
+
         if not db_manager.has_engine():
             return create_error_response(
-                "No database connection established", 
+                "No database connection established",
                 "connection_error",
                 "Use connect_database tool first"
             )
