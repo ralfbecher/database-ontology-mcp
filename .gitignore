@@ -20,6 +20,9 @@ env/
 htmlcov/
 .tox/
 
+# Import folder
+import/
+
 # Temporary chart files
 tmp/
 

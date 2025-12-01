@@ -14,6 +14,7 @@ from fastmcp.utilities.types import Image
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
+from .r2rml_generator import R2RMLGenerator
 from .config import config_manager
 from . import __version__, __name__ as SERVER_NAME
 
@@ -46,6 +47,53 @@ if env_loaded:
     logger.info(f"POSTGRES_HOST from environment: {os.getenv('POSTGRES_HOST')}")
 else:
     logger.warning("No .env file found - environment variables may not be available")
+
+# Output directory for generated files
+from .constants import DEFAULT_OUTPUT_DIR
+OUTPUT_DIR = Path(__file__).parent.parent / os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Context state keys for storing filenames
+CTX_SCHEMA_FILE = "schema_file"
+CTX_ONTOLOGY_FILE = "ontology_file"
+CTX_R2RML_FILE = "r2rml_file"
+
+
+def get_output_dir() -> Path:
+    """Get the output directory for generated files."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    return OUTPUT_DIR
+
+
+async def load_ontology_from_ctx(ctx: Context) -> tuple[OntologyGenerator, str]:
+    """Load ontology from session context.
+
+    This helper function retrieves the ontology filename from session context
+    and loads it into an OntologyGenerator instance.
+
+    Args:
+        ctx: The FastMCP context
+
+    Returns:
+        Tuple of (OntologyGenerator with loaded graph, filename)
+
+    Raises:
+        ValueError: If no ontology file is found in context or file doesn't exist
+    """
+    filename = ctx.get_state(CTX_ONTOLOGY_FILE)
+    if not filename:
+        raise ValueError("No ontology file in session context. Run generate_ontology first.")
+
+    output_dir = get_output_dir()
+    ontology_path = output_dir / filename
+
+    if not ontology_path.exists():
+        raise ValueError(f"Ontology file not found: {filename}")
+
+    generator = _server_state.get_ontology_generator()
+    generator.load_from_file(str(ontology_path))
+
+    return generator, filename
 
 # --- MCP Server Setup ---
 
@@ -548,7 +596,10 @@ async def list_schemas(ctx: Context) -> List[str]:
 
 
 @mcp.tool()
-async def analyze_schema(ctx: Context, schema_name: Optional[str] = None) -> Dict[str, Any]:
+async def analyze_schema(
+    ctx: Context,
+    schema_name: Optional[str] = None
+) -> Dict[str, Any]:
     """Analyze a database schema and return comprehensive table information including relationships.
 
     This tool provides complete schema analysis including:
@@ -559,6 +610,25 @@ async def analyze_schema(ctx: Context, schema_name: Optional[str] = None) -> Dic
     - Row counts for each table
 
     The analysis is automatically saved as a JSON file in the tmp/ folder for later use.
+
+    R2RML MAPPING GENERATION:
+    This tool automatically generates an R2RML (RDB to RDF Mapping Language) mapping file.
+    R2RML is a W3C standard for expressing customized mappings from relational databases
+    to RDF datasets. The generated mapping includes:
+    - TriplesMap definitions for each table
+    - Subject templates based on primary keys
+    - Predicate-object maps for all columns with proper XSD datatypes
+    - Foreign key relationships mapped as IRI references
+
+    The base IRI for R2RML mappings is configured via the R2RML_BASE_IRI environment variable
+    (default: http://mycompany.com/). The schema name is automatically appended to form
+    the complete base IRI (e.g., http://mycompany.com/public/).
+
+    The R2RML mapping enables:
+    - Converting relational data to RDF format
+    - SPARQL querying over relational databases via R2RML processors
+    - Linked Data publication from databases
+    - Semantic integration with other RDF datasets
 
     RELATIONSHIP ANALYSIS:
     The foreign_keys field for each table contains all relationships, which is CRITICAL for:
@@ -589,32 +659,36 @@ async def analyze_schema(ctx: Context, schema_name: Optional[str] = None) -> Dic
             - comment: Table description
             - row_count: Number of rows in table
         - file_path: Path to the saved JSON file in tmp/ folder
+        - r2rml_file_path: Path to the saved R2RML mapping file in tmp/ folder
+        - r2rml_base_iri: Base IRI used for R2RML generation
         - next_steps: Recommended workflow guidance
         - analytical_guidance: Instructions for next step
-    
+
     RECOMMENDED WORKFLOW:
     After analyzing schema, run generate_ontology() next for optimal SQL generation.
-    
+
     Standard analytical workflow:
     1. analyze_schema() - Get schema structure and relationships
-    2. generate_ontology() - Create ontology with database schema linking  
+    2. generate_ontology() - Create ontology with database schema linking
     3. execute_sql_query() - Generate SQL with ontology context
-    
+
     The ontology provides:
     - Database schema linking (db: namespace annotations)
     - SQL column references (table.column format)
     - JOIN conditions for safe relationship traversal
     - Metadata for preventing fan-trap issues
-    
+
     Ontology context improves SQL accuracy and helps prevent data corruption.
     """
     db_manager = _server_state.get_db_manager()
     tables = db_manager.get_tables(schema_name)
-    
+
     all_table_info = []
+    table_info_objects = []  # Keep original TableInfo objects for R2RML generation
     for table_name in tables:
         table_info = db_manager.analyze_table(table_name, schema_name)
         if table_info:
+            table_info_objects.append(table_info)  # Store for R2RML generation
             # Convert dataclass to dict for JSON serialization
             table_dict = {
                 "name": table_info.name,
@@ -644,54 +718,103 @@ async def analyze_schema(ctx: Context, schema_name: Optional[str] = None) -> Dic
         "tables": all_table_info
     }
 
-    # Add analytical workflow guidance
-    if all_table_info:
-        schema_result["next_steps"] = {
-            "recommended": "generate_ontology",
-            "reason": "Generate ontology with database schema linking for accurate SQL generation and fan-trap prevention",
-            "workflow": [
-                "1. ✅ analyze_schema (completed)",
-                "2. ➡️  generate_ontology (recommended next)",
-                "3. ➡️  execute_sql_query (with ontology context)"
-            ]
-        }
-        schema_result["analytical_guidance"] = (
-            "Recommended next step: Run generate_ontology()\n\n"
-            "This will create an ontology with:\n"
-            "• Database schema linking (db: namespace)\n"
-            "• SQL column references for queries\n"
-            "• JOIN conditions for relationships\n"
-            "• Metadata for fan-trap prevention\n\n"
-            "The ontology provides context for accurate SQL generation."
-        )
-        schema_result["next_tool"] = "generate_ontology"
-        await ctx.info(f"Schema analysis complete with {len(all_table_info)} tables; next call should be generate_ontology")
-    else:
-        await ctx.info("Schema analysis found no tables")
-
-    # Save schema analysis to tmp folder for user access
-    schema_file_path = None
+    # Save schema analysis to output folder (without guidance data)
+    schema_filename = None
     try:
         import json
-        TMP_DIR = Path(__file__).parent.parent / "tmp"
-        TMP_DIR.mkdir(exist_ok=True)  # Ensure tmp directory exists
+        output_dir = get_output_dir()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
         schema_filename = f"schema_{schema_safe}_{timestamp}.json"
-        schema_file_path = TMP_DIR / schema_filename
+        schema_file_path = output_dir / schema_filename
 
         with open(schema_file_path, 'w', encoding='utf-8') as f:
             json.dump(schema_result, f, indent=2, ensure_ascii=False)
 
         logger.info(f"Saved schema analysis to: {schema_file_path}")
 
-        # Add file path to result
-        schema_result["file_path"] = str(schema_file_path)
+        # Store filename in context and result
+        ctx.set_state(CTX_SCHEMA_FILE, schema_filename)
+        schema_result["schema_file"] = schema_filename
 
     except Exception as e:
         logger.warning(f"Failed to save schema analysis to file: {e}")
         # Continue even if file save failed
+
+    # Generate R2RML mapping
+    r2rml_filename = None
+    if table_info_objects:
+        try:
+            output_dir = get_output_dir()
+
+            # Determine base IRI from environment variable with schema appended
+            from .constants import DEFAULT_R2RML_BASE_IRI
+            effective_schema = schema_name or "default"
+            r2rml_base = os.getenv("R2RML_BASE_IRI", DEFAULT_R2RML_BASE_IRI)
+            if not r2rml_base.endswith('/'):
+                r2rml_base += '/'
+            base_iri = f"{r2rml_base}{effective_schema}/"
+
+            # Get database name from connection info
+            database_name = db_manager.connection_info.get("database", "database")
+
+            # Generate R2RML mapping
+            r2rml_generator = R2RMLGenerator(
+                base_iri=base_iri,
+                database_name=database_name
+            )
+            r2rml_content = r2rml_generator.generate_from_schema(
+                table_info_objects,
+                schema_name=effective_schema
+            )
+
+            # Save R2RML mapping to file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            schema_safe = effective_schema.replace(" ", "_").replace(".", "_")
+            r2rml_filename = f"r2rml_{schema_safe}_{timestamp}.ttl"
+            r2rml_file_path = output_dir / r2rml_filename
+
+            with open(r2rml_file_path, 'w', encoding='utf-8') as f:
+                f.write(r2rml_content)
+
+            logger.info(f"Generated R2RML mapping: {r2rml_file_path}")
+
+            # Store filename in context and result
+            ctx.set_state(CTX_R2RML_FILE, r2rml_filename)
+            schema_result["r2rml_file"] = r2rml_filename
+            schema_result["r2rml_base_iri"] = base_iri
+
+            await ctx.info(f"R2RML mapping generated with {len(table_info_objects)} tables")
+
+        except Exception as e:
+            logger.warning(f"Failed to generate R2RML mapping: {e}")
+            schema_result["r2rml_error"] = str(e)
+
+    # Add analytical workflow guidance for LLM (not saved to file)
+    if all_table_info:
+        schema_result["next_steps"] = {
+            "recommended": "generate_ontology",
+            "reason": "Generate ontology with database schema linking for accurate SQL generation and fan-trap prevention",
+            "workflow": [
+                "1. analyze_schema (completed)",
+                "2. generate_ontology (recommended next)",
+                "3. execute_sql_query (with ontology context)"
+            ]
+        }
+        schema_result["analytical_guidance"] = (
+            "Recommended next step: Run generate_ontology()\n\n"
+            "This will create an ontology with:\n"
+            "- Database schema linking (db: namespace)\n"
+            "- SQL column references for queries\n"
+            "- JOIN conditions for relationships\n"
+            "- Metadata for fan-trap prevention\n\n"
+            "The ontology provides context for accurate SQL generation."
+        )
+        schema_result["next_tool"] = "generate_ontology"
+        await ctx.info(f"Schema analysis complete with {len(all_table_info)} tables; next call should be generate_ontology")
+    else:
+        await ctx.info("Schema analysis found no tables")
 
     return schema_result
 
@@ -801,22 +924,24 @@ async def generate_ontology(
     generator = _server_state.get_ontology_generator(base_uri=base_uri)
     ontology_ttl = generator.generate_from_schema(tables_info)
 
-    # Save ontology to tmp folder for user access
-    ontology_file_path = None
+    # Save ontology to output folder
+    ontology_filename = None
     try:
-        TMP_DIR = Path(__file__).parent.parent / "tmp"
-        TMP_DIR.mkdir(exist_ok=True)  # Ensure tmp directory exists
+        output_dir = get_output_dir()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
         ontology_filename = f"ontology_{schema_safe}_{timestamp}.ttl"
-        ontology_file_path = TMP_DIR / ontology_filename
-        
+        ontology_file_path = output_dir / ontology_filename
+
         with open(ontology_file_path, 'w', encoding='utf-8') as f:
             f.write(ontology_ttl)
-        
+
         logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
         logger.info(f"Saved ontology to: {ontology_file_path}")
+
+        # Store filename in context
+        ctx.set_state(CTX_ONTOLOGY_FILE, ontology_filename)
 
         await ctx.info(f"Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names")
 
@@ -830,7 +955,7 @@ async def generate_ontology(
 
         # Build result with guidance
         result = ontology_ttl
-        result += f"\n\n# Ontology saved to: {ontology_file_path}"
+        result += f"\n\n# Ontology file: {ontology_filename}"
 
         # Add semantic name resolution guidance if cryptic names detected
         cryptic_count = (name_analysis["summary"]["classes_needing_review"] +
@@ -861,15 +986,13 @@ async def generate_ontology(
 
 @mcp.tool()
 async def suggest_semantic_names(
-    ctx: Context,
-    ontology_ttl: Optional[str] = None,
-    schema_name: Optional[str] = None
+    ctx: Context
 ) -> Dict[str, Any]:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
-    This tool analyzes an ontology (either from a previous generate_ontology call or from the
-    connected database) and returns a structured list of all class, property, and relationship
-    names along with analysis of which ones appear to be abbreviations or cryptic identifiers.
+    This tool analyzes the ontology from session context (set by generate_ontology) and returns
+    a structured list of all class, property, and relationship names along with analysis of
+    which ones appear to be abbreviations or cryptic identifiers.
 
     ## PURPOSE
 
@@ -882,7 +1005,7 @@ async def suggest_semantic_names(
 
     After calling generate_ontology():
     ```
-    1. suggest_semantic_names() → Returns list of names needing review
+    1. suggest_semantic_names() → Returns list of names needing review (loads from context)
     2. LLM analyzes names and generates suggestions
     3. apply_semantic_names(suggestions) → Updates ontology with better names
     ```
@@ -905,11 +1028,8 @@ async def suggest_semantic_names(
     - analysis_hints: Summary of detected issues
     - llm_prompt: Instructions for generating name suggestions
 
-    Args:
-        ontology_ttl: Optional Turtle format ontology string. If not provided,
-                     will use the most recently generated ontology from the server state.
-        schema_name: Optional schema name to regenerate ontology from database.
-                    Only used if ontology_ttl is not provided.
+    No database connection is required - the ontology is automatically
+    loaded from the session context (set by generate_ontology).
 
     Returns:
         Dictionary containing extracted names, analysis results, and instructions
@@ -931,43 +1051,14 @@ async def suggest_semantic_names(
     ```
     """
     try:
-        generator = None
-
-        if ontology_ttl:
-            # Parse the provided ontology
-            from rdflib import Graph
-            generator = _server_state.get_ontology_generator()
-            generator.graph = Graph()
-            generator.graph.parse(data=ontology_ttl, format="turtle")
-            # Re-bind namespaces after parsing
-            generator.graph.bind("ns", generator.base_uri)
-            generator.graph.bind("db", generator.db_ns)
-        else:
-            # Try to generate from database
-            db_manager = _server_state.get_db_manager()
-
-            if not db_manager.has_engine():
-                return {
-                    "error": "No ontology provided and no database connection. Please either provide ontology_ttl parameter or connect to database first.",
-                    "error_type": "validation_error"
-                }
-
-            # Generate fresh ontology from database
-            tables = db_manager.get_tables(schema_name)
-            tables_info = []
-            for table_name in tables:
-                table_info = db_manager.analyze_table(table_name, schema_name)
-                if table_info:
-                    tables_info.append(table_info)
-
-            if not tables_info:
-                return {
-                    "error": f"No tables found in schema '{schema_name or 'default'}'",
-                    "error_type": "data_error"
-                }
-
-            generator = _server_state.get_ontology_generator()
-            generator.generate_from_schema(tables_info)
+        # Load ontology from session context
+        try:
+            generator, source_filename = await load_ontology_from_ctx(ctx)
+        except ValueError as e:
+            return {
+                "error": str(e),
+                "error_type": "context_error"
+            }
 
         # Extract names for review
         extraction_result = generator.extract_names_for_review()
@@ -1021,20 +1112,19 @@ async def suggest_semantic_names(
 async def apply_semantic_names(
     ctx: Context,
     suggestions: str,
-    schema_name: Optional[str] = None,
     save_to_file: bool = True
 ) -> str:
-    """Apply LLM-suggested semantic names to the ontology.
+    """Apply LLM-suggested semantic names to an existing ontology.
 
-    This tool takes name suggestions generated by the LLM (after calling suggest_semantic_names)
-    and applies them to the ontology, updating labels and adding business descriptions.
+    This tool takes name suggestions and applies them to the ontology
+    automatically loaded from the session context (set by generate_ontology).
 
     ## PURPOSE
 
     Completes the semantic name resolution workflow:
-    1. generate_ontology() → Creates initial ontology with database names
+    1. generate_ontology() → Creates ontology, stores in session context
     2. suggest_semantic_names() → Extracts names for LLM review
-    3. apply_semantic_names() → Applies LLM suggestions to ontology
+    3. apply_semantic_names(suggestions) → Loads ontology from context, applies suggestions
 
     ## WHAT GETS UPDATED
 
@@ -1050,6 +1140,9 @@ async def apply_semantic_names(
     so that SQL generation continues to work correctly. The semantic names are
     used for business understanding and documentation.
 
+    No database connection is required - the ontology is automatically
+    loaded from the session context (set by generate_ontology).
+
     Args:
         suggestions: JSON string containing name suggestions in the format:
             {
@@ -1057,7 +1150,6 @@ async def apply_semantic_names(
                 "properties": [{"original_name": "...", "table_name": "...", "suggested_name": "...", "description": "..."}],
                 "relationships": [{"original_name": "...", "suggested_name": "...", "description": "..."}]
             }
-        schema_name: Optional schema name to regenerate ontology from database before applying.
         save_to_file: Whether to save the updated ontology to a file (default: True)
 
     Returns:
@@ -1083,6 +1175,12 @@ async def apply_semantic_names(
     try:
         import json
 
+        # Load ontology from session context
+        try:
+            generator, source_filename = await load_ontology_from_ctx(ctx)
+        except ValueError as e:
+            return create_error_response(str(e), "context_error")
+
         # Parse suggestions
         try:
             if isinstance(suggestions, str):
@@ -1103,51 +1201,26 @@ async def apply_semantic_names(
                 "parameter_error"
             )
 
-        # Get or create ontology generator with existing graph
-        db_manager = _server_state.get_db_manager()
-
-        if not db_manager.has_engine():
-            return create_error_response(
-                "No database connection established. Please use connect_database tool first.",
-                "connection_error"
-            )
-
-        # Generate fresh ontology from database
-        tables = db_manager.get_tables(schema_name)
-        tables_info = []
-        for table_name in tables:
-            table_info = db_manager.analyze_table(table_name, schema_name)
-            if table_info:
-                tables_info.append(table_info)
-
-        if not tables_info:
-            return create_error_response(
-                f"No tables found in schema '{schema_name or 'default'}'",
-                "data_error"
-            )
-
-        generator = _server_state.get_ontology_generator()
-        generator.generate_from_schema(tables_info)
-
         # Apply the semantic names
         updated_ontology = generator.apply_semantic_names(name_suggestions)
 
         # Save to file if requested
-        ontology_file_path = None
+        new_ontology_filename = None
         if save_to_file:
             try:
-                TMP_DIR = Path(__file__).parent.parent / "tmp"
-                TMP_DIR.mkdir(exist_ok=True)
+                output_dir = get_output_dir()
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-                ontology_filename = f"ontology_{schema_safe}_semantic_{timestamp}.ttl"
-                ontology_file_path = TMP_DIR / ontology_filename
+                new_ontology_filename = f"ontology_semantic_{timestamp}.ttl"
+                ontology_file_path = output_dir / new_ontology_filename
 
                 with open(ontology_file_path, 'w', encoding='utf-8') as f:
                     f.write(updated_ontology)
 
                 logger.info(f"Saved semantic ontology to: {ontology_file_path}")
+
+                # Update context with new filename
+                ctx.set_state(CTX_ONTOLOGY_FILE, new_ontology_filename)
 
             except Exception as e:
                 logger.warning(f"Failed to save ontology to file: {e}")
@@ -1164,9 +1237,9 @@ async def apply_semantic_names(
         result += f"- Classes updated: {classes_updated}\n"
         result += f"- Properties updated: {properties_updated}\n"
         result += f"- Relationships updated: {relationships_updated}\n"
-
-        if ontology_file_path:
-            result += f"\n# Ontology saved to: {ontology_file_path}\n"
+        if new_ontology_filename:
+            result += f"\n## ontology_file: {new_ontology_filename}\n"
+            result += f"\nThe ontology file '{new_ontology_filename}' has been saved and is now the active ontology in session context.\n"
 
         result += f"\n{updated_ontology}"
 

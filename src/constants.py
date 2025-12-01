@@ -20,6 +20,12 @@ DEFAULT_BASE_URI = "http://example.com/ontology/"
 ONTOLOGY_TITLE = "Database Schema Ontology"
 ONTOLOGY_DESCRIPTION = "Ontology generated from database schema"
 
+# R2RML mapping constants
+DEFAULT_R2RML_BASE_IRI = "http://mycompany.com/"
+
+# Output directory for generated files (schema, ontology, r2rml, etc.)
+DEFAULT_OUTPUT_DIR = "tmp"
+
 # Identifier validation pattern
 IDENTIFIER_PATTERN = r'^[a-zA-Z_][a-zA-Z0-9_-]*$'
 

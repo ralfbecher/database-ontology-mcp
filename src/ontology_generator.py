@@ -34,6 +34,44 @@ class OntologyGenerator:
         self.graph.bind("owl", OWL)
         self.graph.bind("xsd", XSD)
 
+    def load_from_file(self, file_path: str) -> None:
+        """Load an existing ontology from a Turtle file.
+
+        Args:
+            file_path: Path to the .ttl file to load
+        """
+        self.graph = Graph()
+        self.graph.parse(file_path, format="turtle")
+
+        # Re-bind namespaces
+        self.graph.bind("ns", self.base_uri)
+        self.graph.bind("db", self.db_ns)
+        self.graph.bind("rdf", RDF)
+        self.graph.bind("rdfs", RDFS)
+        self.graph.bind("owl", OWL)
+        self.graph.bind("xsd", XSD)
+
+        logger.info(f"Loaded ontology from {file_path} with {len(self.graph)} triples")
+
+    def load_from_string(self, turtle_content: str) -> None:
+        """Load an existing ontology from a Turtle string.
+
+        Args:
+            turtle_content: Turtle format ontology content
+        """
+        self.graph = Graph()
+        self.graph.parse(data=turtle_content, format="turtle")
+
+        # Re-bind namespaces
+        self.graph.bind("ns", self.base_uri)
+        self.graph.bind("db", self.db_ns)
+        self.graph.bind("rdf", RDF)
+        self.graph.bind("rdfs", RDFS)
+        self.graph.bind("owl", OWL)
+        self.graph.bind("xsd", XSD)
+
+        logger.info(f"Loaded ontology from string with {len(self.graph)} triples")
+
     def generate_from_schema(self, tables_info: List[TableInfo]) -> str:
         """Generate an ontology from a list of table information."""
         # Add ontology metadata
