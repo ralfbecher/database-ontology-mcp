@@ -4,7 +4,7 @@
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![FastMCP](https://img.shields.io/badge/FastMCP-2.12+-blue)](https://github.com/jlowin/fastmcp)
+[![FastMCP](https://img.shields.io/badge/FastMCP-2.13+-blue)](https://github.com/jlowin/fastmcp)
 
 This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
 
@@ -37,6 +37,13 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 - **Business context inference** from table and column naming patterns
 - **Complete SQL mappings** embedded directly in ontology
 - **Fan-trap detection** and query safety validation
+
+### 🗺️ R2RML Mapping Generation
+
+- **W3C-compliant R2RML** mappings auto-generated alongside schema analysis
+- **SQL query templates** with `rr:sqlQuery` and `rr:sqlVersion rr:SQL2008`
+- **XSD datatype mapping** from SQL types to RDF datatypes
+- **Configurable base IRI** via environment variable (`R2RML_BASE_IRI`)
 
 ### 🛡️ Advanced SQL Safety
 
@@ -180,6 +187,7 @@ database-ontology-mcp/
 │   ├── main.py                     # FastMCP server entry point (12 tools)
 │   ├── database_manager.py         # Database connection and analysis
 │   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
+│   ├── r2rml_generator.py          # W3C R2RML mapping generation
 │   ├── dremio_client.py            # Dremio database client
 │   ├── security.py                 # Security and validation utilities
 │   ├── chart_utils.py              # Chart generation utilities
@@ -258,6 +266,10 @@ Create a `.env` file in the project root:
 # Server Configuration
 LOG_LEVEL=INFO
 ONTOLOGY_BASE_URI=http://example.com/ontology/
+
+# R2RML Mapping Configuration
+R2RML_BASE_IRI=http://mycompany.com/
+OUTPUT_DIR=tmp
 
 # MCP Transport Configuration
 # Options: http, sse (Server-Sent Events)
@@ -463,13 +475,16 @@ Analyze database schema and return comprehensive table information including rel
 
 **Returns:** Schema structure with tables, columns, primary keys, foreign keys, and relationship information
 
-**Output:** Schema analysis is automatically saved to `tmp/schema_{schema_name}_{timestamp}.json` for later use
+**Output Files:**
+- Schema analysis: `tmp/schema_{schema_name}_{timestamp}.json`
+- R2RML mapping: `tmp/r2rml_{schema_name}_{timestamp}.ttl`
 
 **Key Features:**
 
 - Foreign key analysis is critical for preventing fan-traps in SQL queries
 - JSON export enables schema reuse and version control
-- File path included in response for easy access
+- **Automatic R2RML generation** with W3C-compliant mappings
+- File paths included in response for easy access
 
 #### 4. `generate_ontology`
 
@@ -945,6 +960,29 @@ Users can confidently use all features documented in this README. The test failu
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📋 Recent Changes
+
+### Version 0.4.0
+
+**R2RML Mapping Generation** (Dec 2025):
+
+- **Automatic R2RML generation** - W3C-compliant R2RML mappings auto-generated with `analyze_schema`
+- **R2RMLGenerator class** - New `src/r2rml_generator.py` module for RDB-to-RDF mapping
+- **SQL query templates** - Uses `rr:logicalTable` with `rr:sqlQuery` and `rr:sqlVersion rr:SQL2008`
+- **XSD datatype mapping** - Automatic mapping from SQL types to XSD datatypes
+- **Configurable base IRI** - `R2RML_BASE_IRI` environment variable (default: `http://mycompany.com/`)
+- **Output directory** - `OUTPUT_DIR` environment variable for generated files (default: `tmp`)
+
+**Per-Session State Isolation** (Dec 2025):
+
+- **Session isolation** - Each MCP session gets isolated database connections and file tracking
+- **SessionData class** - Per-session storage for db_manager, schema_file, ontology_file, r2rml_file
+- **Robust session ID** - Fallback mechanism for HTTP transport compatibility (`ctx.session_id` → `id(ctx.session)` → default)
+- **Fixed FastMCP state bug** - `ctx.session.state` doesn't exist; implemented custom session management
+
+**Dependency Updates**:
+
+- FastMCP upgraded to 2.13.2+
+- Updated Pydantic, rdflib, and other dependencies to latest versions
 
 ### Version 0.3.5
 
