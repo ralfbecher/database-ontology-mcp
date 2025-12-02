@@ -53,47 +53,11 @@ from .constants import DEFAULT_OUTPUT_DIR
 OUTPUT_DIR = Path(__file__).parent.parent / os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Context state keys for storing filenames
-CTX_SCHEMA_FILE = "schema_file"
-CTX_ONTOLOGY_FILE = "ontology_file"
-CTX_R2RML_FILE = "r2rml_file"
-
-
 def get_output_dir() -> Path:
     """Get the output directory for generated files."""
     OUTPUT_DIR.mkdir(exist_ok=True)
     return OUTPUT_DIR
 
-
-async def load_ontology_from_ctx(ctx: Context) -> tuple[OntologyGenerator, str]:
-    """Load ontology from session context.
-
-    This helper function retrieves the ontology filename from session context
-    and loads it into an OntologyGenerator instance.
-
-    Args:
-        ctx: The FastMCP context
-
-    Returns:
-        Tuple of (OntologyGenerator with loaded graph, filename)
-
-    Raises:
-        ValueError: If no ontology file is found in context or file doesn't exist
-    """
-    filename = ctx.get_state(CTX_ONTOLOGY_FILE)
-    if not filename:
-        raise ValueError("No ontology file in session context. Run generate_ontology first.")
-
-    output_dir = get_output_dir()
-    ontology_path = output_dir / filename
-
-    if not ontology_path.exists():
-        raise ValueError(f"Ontology file not found: {filename}")
-
-    generator = _server_state.get_ontology_generator()
-    generator.load_from_file(str(ontology_path))
-
-    return generator, filename
 
 # --- MCP Server Setup ---
 
@@ -377,20 +341,50 @@ analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_s
 
 # --- Dependency Management ---
 
-class ServerState:
-    """Manages server state and dependencies."""
+class SessionData:
+    """Per-session data storage."""
 
     def __init__(self):
-        self._db_manager: Optional[DatabaseManager] = None
+        self.db_manager: Optional[DatabaseManager] = None
+        self.schema_file: Optional[str] = None
+        self.ontology_file: Optional[str] = None
+        self.r2rml_file: Optional[str] = None
+
+
+def get_session_id(ctx: Context) -> str:
+    """Get a unique session identifier from context.
+
+    Args:
+        ctx: The FastMCP context
+
+    Returns:
+        A unique session identifier string
+    """
+    # Try ctx.session_id first (may be None with HTTP transport)
+    if hasattr(ctx, 'session_id') and ctx.session_id:
+        return str(ctx.session_id)
+    # Fall back to id(ctx.session) as unique identifier
+    if hasattr(ctx, 'session') and ctx.session:
+        return f"session_{id(ctx.session)}"
+    # Last resort: use a default session (single-user mode)
+    return "default_session"
+
+
+class ServerState:
+    """Manages server state with per-session isolation."""
+
+    def __init__(self):
+        self._sessions: Dict[str, SessionData] = {}
         self._ontology_generator: Optional[OntologyGenerator] = None
         self._loaded_ontology: Optional[str] = None  # Loaded ontology TTL content
         self._loaded_ontology_path: Optional[str] = None  # Path to loaded ontology file
 
-    def get_db_manager(self) -> DatabaseManager:
-        """Get or create database manager instance."""
-        if self._db_manager is None:
-            self._db_manager = DatabaseManager()
-        return self._db_manager
+    def get_session(self, session_id: str) -> SessionData:
+        """Get or create session data for a given session ID."""
+        if session_id not in self._sessions:
+            self._sessions[session_id] = SessionData()
+            logger.debug(f"Created new session: {session_id}")
+        return self._sessions[session_id]
 
     def get_ontology_generator(self, base_uri: str = "http://example.com/ontology/") -> OntologyGenerator:
         """Get ontology generator instance."""
@@ -414,17 +408,73 @@ class ServerState:
         """Check if an ontology has been loaded."""
         return self._loaded_ontology is not None
 
+    def cleanup_session(self, session_id: str):
+        """Clean up a specific session's resources."""
+        if session_id in self._sessions:
+            session = self._sessions[session_id]
+            if session.db_manager:
+                session.db_manager.disconnect()
+            del self._sessions[session_id]
+            logger.debug(f"Cleaned up session: {session_id}")
+
     def cleanup(self):
-        """Clean up resources."""
-        if self._db_manager:
-            self._db_manager.disconnect()
-            self._db_manager = None
+        """Clean up all resources."""
+        for session_id in list(self._sessions.keys()):
+            self.cleanup_session(session_id)
         self._ontology_generator = None
         self._loaded_ontology = None
         self._loaded_ontology_path = None
 
 # Global server state
 _server_state = ServerState()
+
+
+def get_session_data(ctx: Context) -> SessionData:
+    """Get session data for the current context."""
+    session_id = get_session_id(ctx)
+    return _server_state.get_session(session_id)
+
+
+def get_session_db_manager(ctx: Context) -> DatabaseManager:
+    """Get or create a DatabaseManager for the current session."""
+    session = get_session_data(ctx)
+    if session.db_manager is None:
+        session.db_manager = DatabaseManager()
+        logger.debug(f"Created new DatabaseManager for session: {get_session_id(ctx)}")
+    return session.db_manager
+
+
+def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
+    """Load ontology from session state.
+
+    This helper function retrieves the ontology filename from session state
+    and loads it into an OntologyGenerator instance.
+
+    Args:
+        ctx: The FastMCP context
+
+    Returns:
+        Tuple of (OntologyGenerator with loaded graph, filename)
+
+    Raises:
+        ValueError: If no ontology file is found in session or file doesn't exist
+    """
+    session = get_session_data(ctx)
+    filename = session.ontology_file
+    if not filename:
+        raise ValueError("No ontology file in session state. Run generate_ontology first.")
+
+    output_dir = get_output_dir()
+    ontology_path = output_dir / filename
+
+    if not ontology_path.exists():
+        raise ValueError(f"Ontology file not found: {filename}")
+
+    generator = _server_state.get_ontology_generator()
+    generator.load_from_file(str(ontology_path))
+
+    return generator, filename
+
 
 # --- Error Response Helper ---
 
@@ -469,7 +519,7 @@ async def connect_database(ctx: Context, db_type: str) -> str:
             "validation_error"
         )
     
-    db_manager = _server_state.get_db_manager()
+    db_manager = get_session_db_manager(ctx)
     
     if db_type == "postgresql":
         # Get parameters from environment
@@ -586,7 +636,7 @@ async def list_schemas(ctx: Context) -> List[str]:
     Returns:
         List of schema names or error response
     """
-    db_manager = _server_state.get_db_manager()
+    db_manager = get_session_db_manager(ctx)
     schemas = db_manager.get_schemas()
     if schemas:
         await ctx.info(f"Found {len(schemas)} schemas; next call should be analyze_schema")
@@ -680,7 +730,7 @@ async def analyze_schema(
 
     Ontology context improves SQL accuracy and helps prevent data corruption.
     """
-    db_manager = _server_state.get_db_manager()
+    db_manager = get_session_db_manager(ctx)
     tables = db_manager.get_tables(schema_name)
 
     all_table_info = []
@@ -734,8 +784,8 @@ async def analyze_schema(
 
         logger.info(f"Saved schema analysis to: {schema_file_path}")
 
-        # Store filename in context and result
-        ctx.set_state(CTX_SCHEMA_FILE, schema_filename)
+        # Store filename in session state and result
+        get_session_data(ctx).schema_file = schema_filename
         schema_result["schema_file"] = schema_filename
 
     except Exception as e:
@@ -780,8 +830,8 @@ async def analyze_schema(
 
             logger.info(f"Generated R2RML mapping: {r2rml_file_path}")
 
-            # Store filename in context and result
-            ctx.set_state(CTX_R2RML_FILE, r2rml_filename)
+            # Store filename in session state and result
+            get_session_data(ctx).r2rml_file = r2rml_filename
             schema_result["r2rml_file"] = r2rml_filename
             schema_result["r2rml_base_iri"] = base_iri
 
@@ -889,7 +939,7 @@ async def generate_ontology(
             )
     else:
         # Fall back to fetching from database
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_session_db_manager(ctx)
         
         if not db_manager.has_engine():
             return create_error_response(
@@ -940,8 +990,8 @@ async def generate_ontology(
         logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
         logger.info(f"Saved ontology to: {ontology_file_path}")
 
-        # Store filename in context
-        ctx.set_state(CTX_ONTOLOGY_FILE, ontology_filename)
+        # Store filename in session state
+        get_session_data(ctx).ontology_file = ontology_filename
 
         await ctx.info(f"Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names")
 
@@ -1051,13 +1101,13 @@ async def suggest_semantic_names(
     ```
     """
     try:
-        # Load ontology from session context
+        # Load ontology from session state
         try:
-            generator, source_filename = await load_ontology_from_ctx(ctx)
+            generator, source_filename = load_ontology_from_session(ctx)
         except ValueError as e:
             return {
                 "error": str(e),
-                "error_type": "context_error"
+                "error_type": "session_error"
             }
 
         # Extract names for review
@@ -1175,11 +1225,11 @@ async def apply_semantic_names(
     try:
         import json
 
-        # Load ontology from session context
+        # Load ontology from session state
         try:
-            generator, source_filename = await load_ontology_from_ctx(ctx)
+            generator, source_filename = load_ontology_from_session(ctx)
         except ValueError as e:
-            return create_error_response(str(e), "context_error")
+            return create_error_response(str(e), "session_error")
 
         # Parse suggestions
         try:
@@ -1219,8 +1269,8 @@ async def apply_semantic_names(
 
                 logger.info(f"Saved semantic ontology to: {ontology_file_path}")
 
-                # Update context with new filename
-                ctx.set_state(CTX_ONTOLOGY_FILE, new_ontology_filename)
+                # Update session state with new filename
+                get_session_data(ctx).ontology_file = new_ontology_filename
 
             except Exception as e:
                 logger.warning(f"Failed to save ontology to file: {e}")
@@ -1458,7 +1508,7 @@ async def sample_table_data(
     if limit <= 0 or limit > 100:
         limit = 10
 
-    db_manager = _server_state.get_db_manager()
+    db_manager = get_session_db_manager(ctx)
     sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
 
     if sample_data and len(sample_data) > 0:
@@ -1554,7 +1604,7 @@ async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
         - COMPLIANCE: Adherence to organizational data access policies
     """
     try:
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_session_db_manager(ctx)
         
         if not db_manager.has_engine():
             return {
@@ -1971,7 +2021,7 @@ async def execute_sql_query(
         if isinstance(checklist_completed, str):
             checklist_completed = checklist_completed.lower() in ('true', '1', 'yes')
 
-        db_manager = _server_state.get_db_manager()
+        db_manager = get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
             return create_error_response(
