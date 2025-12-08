@@ -258,7 +258,7 @@ cp .env.template .env  # If template exists, or create new .env
 
 Create a `.env` file in the project root:
 
-```bash
+```env
 # =================================================================
 # Database Ontology MCP Server Configuration
 # =================================================================
@@ -476,6 +476,7 @@ Analyze database schema and return comprehensive table information including rel
 **Returns:** Schema structure with tables, columns, primary keys, foreign keys, and relationship information
 
 **Output Files:**
+
 - Schema analysis: `tmp/schema_{schema_name}_{timestamp}.json`
 - R2RML mapping: `tmp/r2rml_{schema_name}_{timestamp}.ttl`
 
@@ -532,9 +533,28 @@ Apply LLM-suggested semantic names to the ontology, updating labels and adding b
 - `suggestions` (required): JSON string with name suggestions:
   ```json
   {
-    "classes": [{"original_name": "cust_mstr", "suggested_name": "Customer Master", "description": "..."}],
-    "properties": [{"original_name": "ord_dt", "table_name": "orders", "suggested_name": "Order Date", "description": "..."}],
-    "relationships": [{"original_name": "orders_has_customers", "suggested_name": "Placed By", "description": "..."}]
+    "classes": [
+      {
+        "original_name": "cust_mstr",
+        "suggested_name": "Customer Master",
+        "description": "..."
+      }
+    ],
+    "properties": [
+      {
+        "original_name": "ord_dt",
+        "table_name": "orders",
+        "suggested_name": "Order Date",
+        "description": "..."
+      }
+    ],
+    "relationships": [
+      {
+        "original_name": "orders_has_customers",
+        "suggested_name": "Placed By",
+        "description": "..."
+      }
+    ]
   }
   ```
 - `schema_name` (optional): Schema name to regenerate ontology before applying
@@ -546,7 +566,7 @@ Apply LLM-suggested semantic names to the ontology, updating labels and adding b
 
 - `rdfs:label` → suggested business-friendly name
 - `db:semanticName` → new semantic annotation
-- `db:businessDescription` → provided description
+- `rdfs:comment` → provided description (standard RDF property)
 - Original `db:tableName`/`db:columnName` preserved for SQL generation
 
 **Workflow Example:**

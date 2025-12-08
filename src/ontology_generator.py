@@ -279,10 +279,10 @@ class OntologyGenerator:
                 table_uri = self.base_uri[self._clean_name(table_name)]
                 if (table_uri, RDF.type, OWL.Class) in self.graph:
                     if "business_description" in table_desc:
-                        # Remove existing basic description if present
-                        self.graph.remove((table_uri, self.db_ns.businessDescription, None))
-                        # Add new rich description
-                        self.graph.add((table_uri, self.db_ns.businessDescription, 
+                        # Remove existing comment if present
+                        self.graph.remove((table_uri, RDFS.comment, None))
+                        # Add new rich description as rdfs:comment
+                        self.graph.add((table_uri, RDFS.comment,
                                       Literal(table_desc["business_description"])))
                     
                     if "table_type" in table_desc:
@@ -306,10 +306,10 @@ class OntologyGenerator:
                         (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph):
                         
                         if "business_description" in column_desc:
-                            # Remove existing basic description if present
-                            self.graph.remove((prop_uri, self.db_ns.businessDescription, None))
-                            # Add new rich description
-                            self.graph.add((prop_uri, self.db_ns.businessDescription, 
+                            # Remove existing comment if present
+                            self.graph.remove((prop_uri, RDFS.comment, None))
+                            # Add new rich description as rdfs:comment
+                            self.graph.add((prop_uri, RDFS.comment,
                                           Literal(column_desc["business_description"])))
                         
                         if "data_characteristics" in column_desc:
@@ -807,9 +807,9 @@ class OntologyGenerator:
                         changes_made += 1
 
                     if description:
-                        # Add or update description
-                        self.graph.remove((class_uri, self.db_ns.businessDescription, None))
-                        self.graph.add((class_uri, self.db_ns.businessDescription, Literal(description)))
+                        # Add or update description as rdfs:comment
+                        self.graph.remove((class_uri, RDFS.comment, None))
+                        self.graph.add((class_uri, RDFS.comment, Literal(description)))
 
         # Apply property name suggestions
         if "properties" in name_suggestions:
@@ -842,9 +842,9 @@ class OntologyGenerator:
                         changes_made += 1
 
                     if description:
-                        # Add or update description
-                        self.graph.remove((prop_uri, self.db_ns.businessDescription, None))
-                        self.graph.add((prop_uri, self.db_ns.businessDescription, Literal(description)))
+                        # Add or update description as rdfs:comment
+                        self.graph.remove((prop_uri, RDFS.comment, None))
+                        self.graph.add((prop_uri, RDFS.comment, Literal(description)))
 
         # Apply relationship name suggestions
         if "relationships" in name_suggestions:
@@ -870,9 +870,9 @@ class OntologyGenerator:
                         changes_made += 1
 
                     if description:
-                        # Add or update description
-                        self.graph.remove((rel_uri, self.db_ns.businessDescription, None))
-                        self.graph.add((rel_uri, self.db_ns.businessDescription, Literal(description)))
+                        # Add or update description as rdfs:comment
+                        self.graph.remove((rel_uri, RDFS.comment, None))
+                        self.graph.add((rel_uri, RDFS.comment, Literal(description)))
 
         logger.info(f"Applied {changes_made} semantic name changes to ontology")
 
