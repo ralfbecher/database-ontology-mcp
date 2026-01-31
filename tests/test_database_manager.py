@@ -168,9 +168,10 @@ class TestDatabaseManager(unittest.TestCase):
 
         # Mock execute to return different results for different queries
         mock_conn.execute.side_effect = [mock_count_result, mock_sample_result]
+        mock_conn.close = Mock()  # Add close method for cleanup
 
-        self.db_manager.engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
-        self.db_manager.engine.connect.return_value.__exit__ = Mock(return_value=None)
+        # get_connection() calls engine.connect() directly, not as context manager
+        self.db_manager.engine.connect.return_value = mock_conn
 
         # Set connection_info to determine database type for sample query
         self.db_manager.connection_info = {"type": "postgresql"}
@@ -244,12 +245,10 @@ class TestDatabaseManager(unittest.TestCase):
         mock_result.keys = Mock(return_value=['id', 'name'])
         mock_result.fetchall = Mock(return_value=[])
         mock_conn.execute = Mock(return_value=mock_result)
+        mock_conn.close = Mock()  # Add close method for cleanup
 
-        # Mock get_connection context manager properly
-        mock_context = Mock()
-        mock_context.__enter__ = Mock(return_value=mock_conn)
-        mock_context.__exit__ = Mock(return_value=None)
-        self.db_manager.engine.connect = Mock(return_value=mock_context)
+        # get_connection() calls engine.connect() directly, not as context manager
+        self.db_manager.engine.connect = Mock(return_value=mock_conn)
 
         result = self.db_manager.sample_table_data("test_table", limit=-1)
         self.assertEqual(result, [])
@@ -261,11 +260,10 @@ class TestDatabaseManager(unittest.TestCase):
         mock_result2.keys = Mock(return_value=['id', 'name'])
         mock_result2.fetchall = Mock(return_value=[])
         mock_conn2.execute = Mock(return_value=mock_result2)
+        mock_conn2.close = Mock()  # Add close method for cleanup
 
-        mock_context2 = Mock()
-        mock_context2.__enter__ = Mock(return_value=mock_conn2)
-        mock_context2.__exit__ = Mock(return_value=None)
-        self.db_manager.engine.connect = Mock(return_value=mock_context2)
+        # get_connection() calls engine.connect() directly
+        self.db_manager.engine.connect = Mock(return_value=mock_conn2)
 
         result = self.db_manager.sample_table_data("test_table", limit=2000)
         # Should be capped at MAX_SAMPLE_LIMIT (1000)

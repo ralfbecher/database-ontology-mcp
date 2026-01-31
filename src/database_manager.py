@@ -1920,6 +1920,19 @@ class DatabaseManager:
     
     def disconnect(self):
         """Close the database connection and clear stored parameters."""
+        # Shutdown thread pool to prevent leaked threads
+        if hasattr(self, '_thread_pool') and self._thread_pool:
+            try:
+                self._thread_pool.shutdown(wait=False)
+                logger.debug("Thread pool shut down")
+            except Exception as e:
+                logger.warning(f"Error shutting down thread pool: {e}")
+            self._thread_pool = None
+
+        # Clear metadata cache to prevent stale data in reused instances
+        if hasattr(self, '_metadata_cache'):
+            self._metadata_cache.clear()
+
         if self.engine:
             self.engine.dispose()
             self.engine = None

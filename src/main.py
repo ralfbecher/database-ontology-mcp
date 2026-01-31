@@ -15,6 +15,7 @@ from fastmcp.utilities.types import Image
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
 from .r2rml_generator import R2RMLGenerator
+from .obqc_validator import OBQCValidator
 from .config import config_manager
 from . import __version__, __name__ as SERVER_NAME
 
@@ -349,6 +350,10 @@ class SessionData:
         self.schema_file: Optional[str] = None
         self.ontology_file: Optional[str] = None
         self.r2rml_file: Optional[str] = None
+        self.obqc_validator: Optional[OBQCValidator] = None
+        # Loaded ontology from external file (via load_my_ontology)
+        self.loaded_ontology: Optional[str] = None  # TTL content
+        self.loaded_ontology_path: Optional[str] = None  # File path
 
 
 def get_session_id(ctx: Context) -> str:
@@ -375,9 +380,6 @@ class ServerState:
 
     def __init__(self):
         self._sessions: Dict[str, SessionData] = {}
-        self._ontology_generator: Optional[OntologyGenerator] = None
-        self._loaded_ontology: Optional[str] = None  # Loaded ontology TTL content
-        self._loaded_ontology_path: Optional[str] = None  # Path to loaded ontology file
 
     def get_session(self, session_id: str) -> SessionData:
         """Get or create session data for a given session ID."""
@@ -387,26 +389,12 @@ class ServerState:
         return self._sessions[session_id]
 
     def get_ontology_generator(self, base_uri: str = "http://example.com/ontology/") -> OntologyGenerator:
-        """Get ontology generator instance."""
-        # Always create new instance to avoid state pollution
+        """Create a new ontology generator instance.
+
+        Always returns a NEW instance to avoid state pollution between calls.
+        Each caller gets an isolated generator with its own RDF graph.
+        """
         return OntologyGenerator(base_uri=base_uri)
-
-    def set_loaded_ontology(self, ontology_ttl: str, file_path: str):
-        """Store a loaded ontology for use in context."""
-        self._loaded_ontology = ontology_ttl
-        self._loaded_ontology_path = file_path
-
-    def get_loaded_ontology(self) -> Optional[str]:
-        """Get the currently loaded ontology TTL content."""
-        return self._loaded_ontology
-
-    def get_loaded_ontology_path(self) -> Optional[str]:
-        """Get the path to the currently loaded ontology file."""
-        return self._loaded_ontology_path
-
-    def has_loaded_ontology(self) -> bool:
-        """Check if an ontology has been loaded."""
-        return self._loaded_ontology is not None
 
     def cleanup_session(self, session_id: str):
         """Clean up a specific session's resources."""
@@ -421,9 +409,6 @@ class ServerState:
         """Clean up all resources."""
         for session_id in list(self._sessions.keys()):
             self.cleanup_session(session_id)
-        self._ontology_generator = None
-        self._loaded_ontology = None
-        self._loaded_ontology_path = None
 
 # Global server state
 _server_state = ServerState()
@@ -442,6 +427,81 @@ def get_session_db_manager(ctx: Context) -> DatabaseManager:
         session.db_manager = DatabaseManager()
         logger.debug(f"Created new DatabaseManager for session: {get_session_id(ctx)}")
     return session.db_manager
+
+
+def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
+    """Get or create OBQC validator for the current session.
+
+    Returns None if no ontology is loaded. The validator is lazily initialized
+    when first requested and caches the ontology schema for efficient validation.
+
+    Ontology sources (in priority order):
+    1. Session's generated ontology file (from generate_ontology)
+    2. Session's loaded external ontology (from load_my_ontology)
+
+    Args:
+        ctx: The FastMCP context
+
+    Returns:
+        OBQCValidator instance if ontology is available, None otherwise
+    """
+    session = get_session_data(ctx)
+
+    # Check if ontology is available in session (no global fallback for isolation)
+    has_generated_ontology = session.ontology_file is not None
+    has_loaded_ontology = session.loaded_ontology is not None
+
+    if not has_generated_ontology and not has_loaded_ontology:
+        return None
+
+    # Lazy initialization of OBQC validator
+    if session.obqc_validator is None:
+        session.obqc_validator = OBQCValidator()
+
+        # Load ontology into validator - use session-specific OntologyGenerator
+        base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
+        ontology_generator = OntologyGenerator(base_uri)
+
+        if has_generated_ontology:
+            # Priority 1: Load from session's generated ontology file
+            output_dir = get_output_dir()
+            ontology_path = output_dir / session.ontology_file
+            if ontology_path.exists():
+                ontology_generator.load_from_file(str(ontology_path))
+                logger.debug(f"OBQC loaded ontology from session file: {session.ontology_file}")
+        elif has_loaded_ontology:
+            # Priority 2: Load from session's external ontology (load_my_ontology)
+            ontology_generator.load_from_string(session.loaded_ontology)
+            logger.debug(f"OBQC loaded ontology from session's loaded ontology: {session.loaded_ontology_path}")
+
+        session.obqc_validator.load_ontology(ontology_generator.graph, base_uri)
+        logger.debug(f"Initialized OBQC validator for session: {get_session_id(ctx)}")
+
+    return session.obqc_validator
+
+
+def get_session_safe_filename(ctx: Context, prefix: str, suffix: str = "") -> str:
+    """Generate a session-safe filename to prevent cross-session file collisions.
+
+    Uses session ID prefix and microsecond-precision timestamp to ensure uniqueness
+    even with concurrent requests from different sessions.
+
+    Args:
+        ctx: The FastMCP context
+        prefix: Filename prefix (e.g., "schema", "ontology", "r2rml")
+        suffix: Optional suffix before extension (e.g., schema name)
+
+    Returns:
+        Unique filename like "schema_a1b2c3d4_public_20250131_143045123456.json"
+    """
+    session_id = get_session_id(ctx)
+    # Use first 8 chars of session ID for brevity
+    session_prefix = session_id[:8] if len(session_id) >= 8 else session_id
+    # Use microsecond precision to avoid collisions
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    if suffix:
+        return f"{prefix}_{session_prefix}_{suffix}_{timestamp}"
+    return f"{prefix}_{session_prefix}_{timestamp}"
 
 
 def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
@@ -774,9 +834,8 @@ async def analyze_schema(
         import json
         output_dir = get_output_dir()
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-        schema_filename = f"schema_{schema_safe}_{timestamp}.json"
+        schema_filename = get_session_safe_filename(ctx, "schema", schema_safe) + ".json"
         schema_file_path = output_dir / schema_filename
 
         with open(schema_file_path, 'w', encoding='utf-8') as f:
@@ -820,9 +879,8 @@ async def analyze_schema(
             )
 
             # Save R2RML mapping to file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             schema_safe = effective_schema.replace(" ", "_").replace(".", "_")
-            r2rml_filename = f"r2rml_{schema_safe}_{timestamp}.ttl"
+            r2rml_filename = get_session_safe_filename(ctx, "r2rml", schema_safe) + ".ttl"
             r2rml_file_path = output_dir / r2rml_filename
 
             with open(r2rml_file_path, 'w', encoding='utf-8') as f:
@@ -979,9 +1037,8 @@ async def generate_ontology(
     try:
         output_dir = get_output_dir()
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-        ontology_filename = f"ontology_{schema_safe}_{timestamp}.ttl"
+        ontology_filename = get_session_safe_filename(ctx, "ontology", schema_safe) + ".ttl"
         ontology_file_path = output_dir / ontology_filename
 
         with open(ontology_file_path, 'w', encoding='utf-8') as f:
@@ -990,8 +1047,10 @@ async def generate_ontology(
         logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
         logger.info(f"Saved ontology to: {ontology_file_path}")
 
-        # Store filename in session state
-        get_session_data(ctx).ontology_file = ontology_filename
+        # Store filename in session state and invalidate OBQC cache
+        session = get_session_data(ctx)
+        session.ontology_file = ontology_filename
+        session.obqc_validator = None  # Invalidate to reload with new ontology
 
         await ctx.info(f"Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names")
 
@@ -1260,8 +1319,7 @@ async def apply_semantic_names(
             try:
                 output_dir = get_output_dir()
 
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_ontology_filename = f"ontology_semantic_{timestamp}.ttl"
+                new_ontology_filename = get_session_safe_filename(ctx, "ontology", "semantic") + ".ttl"
                 ontology_file_path = output_dir / new_ontology_filename
 
                 with open(ontology_file_path, 'w', encoding='utf-8') as f:
@@ -1269,8 +1327,10 @@ async def apply_semantic_names(
 
                 logger.info(f"Saved semantic ontology to: {ontology_file_path}")
 
-                # Update session state with new filename
-                get_session_data(ctx).ontology_file = new_ontology_filename
+                # Update session state with new filename and invalidate OBQC cache
+                session = get_session_data(ctx)
+                session.ontology_file = new_ontology_filename
+                session.obqc_validator = None  # Invalidate to reload with new ontology
 
             except Exception as e:
                 logger.warning(f"Failed to save ontology to file: {e}")
@@ -1438,8 +1498,11 @@ async def load_my_ontology(
         file_stat = newest_file.stat()
         modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-        # Store the loaded ontology in server state
-        _server_state.set_loaded_ontology(ontology_content, str(newest_file))
+        # Store the loaded ontology in session state (not global, for isolation)
+        session = get_session_data(ctx)
+        session.loaded_ontology = ontology_content
+        session.loaded_ontology_path = str(newest_file)
+        session.obqc_validator = None  # Invalidate to reload with new ontology
 
         logger.info(f"Loaded ontology from: {newest_file}")
         logger.info(f"Ontology contains: {classes_count} classes, {datatype_props} data properties, {object_props} object properties")
@@ -1523,10 +1586,10 @@ async def sample_table_data(
 @mcp.tool()
 async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
     """Validate SQL query syntax without executing it, providing comprehensive analysis and suggestions.
-    
+
     This tool performs thorough SQL syntax validation and analysis before query execution,
     helping prevent errors and optimize query performance across different database platforms.
-    
+
     VALIDATION FEATURES:
     • Multi-database syntax checking (PostgreSQL, Snowflake, Dremio dialects)
     • Reserved keyword detection and escaping recommendations
@@ -1535,7 +1598,16 @@ async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
     • Subquery and CTE (Common Table Expression) validation
     • Aggregate function usage verification
     • Window function syntax checking
-    
+
+    ONTOLOGY-BASED QUERY CHECK (OBQC):
+    When an ontology is loaded (via generate_ontology or load_my_ontology), this tool
+    performs deterministic semantic validation without using LLM:
+    • Schema validation - verifies tables/columns exist in the ontology
+    • Type compatibility - checks type matching in WHERE/ON comparisons
+    • Join validation - ensures joins use declared foreign key relationships
+    • Fan-trap detection - warns when aggregating across multiple 1:many joins
+    • GROUP BY validation - checks completeness for aggregation queries
+
     SECURITY ANALYSIS:
     • SQL injection pattern detection
     • Potentially dangerous operation identification
@@ -1631,6 +1703,58 @@ async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
         
         # Perform validation through database manager
         validation_result = db_manager.validate_sql_syntax(sql_query.strip())
+
+        # Ensure warnings and suggestions lists exist
+        if "warnings" not in validation_result:
+            validation_result["warnings"] = []
+        if "suggestions" not in validation_result:
+            validation_result["suggestions"] = []
+
+        # Perform OBQC (Ontology-Based Query Check) validation if ontology is available
+        obqc_validator = get_session_obqc_validator(ctx)
+        if obqc_validator:
+            # Determine dialect from connection info
+            db_type = db_manager.connection_info.get("type", "postgresql")
+            obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
+
+            # Merge OBQC results into validation_result
+            validation_result.update(obqc_result.to_dict())
+
+            # If OBQC found errors, mark overall validation as failed
+            if not obqc_result.is_valid:
+                validation_result["is_valid"] = False
+                if not validation_result.get("error"):
+                    validation_result["error"] = "OBQC validation failed - see obqc_issues for details"
+                validation_result["error_type"] = validation_result.get("error_type") or "obqc_error"
+
+            # Add OBQC warnings and suggestions to existing lists
+            for issue in obqc_result.issues:
+                if issue.severity.value == "warning":
+                    msg = f"[OBQC] {issue.message}"
+                    if issue.suggestion:
+                        msg += f" - {issue.suggestion}"
+                    validation_result["warnings"].append(msg)
+                elif issue.severity.value == "error" and issue.suggestion:
+                    validation_result["suggestions"].append(f"[OBQC] {issue.suggestion}")
+
+            # Add fan-trap warning if detected
+            if obqc_result.fan_trap_risk:
+                validation_result["warnings"].append(
+                    "[OBQC] FAN-TRAP RISK: Query aggregates across multiple 1:many relationships"
+                )
+                validation_result["suggestions"].append(
+                    "Consider UNION ALL pattern: aggregate each fact table separately, then combine"
+                )
+
+            logger.debug(f"OBQC validation: valid={obqc_result.is_valid}, issues={len(obqc_result.issues)}")
+        else:
+            # No ontology loaded - add informational message
+            validation_result["obqc_valid"] = None
+            validation_result["obqc_issues"] = []
+            validation_result["warnings"].append(
+                "OBQC validation skipped - no ontology loaded. "
+                "Use generate_ontology or load_my_ontology for semantic validation."
+            )
 
         # Log validation results
         if validation_result.get('is_valid'):

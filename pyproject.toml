@@ -44,6 +44,8 @@ dependencies = [
     "pillow>=11.0.0",
     # Network and async
     "aiohttp>=3.11.0",
+    # SQL parsing for OBQC validation
+    "sqlglot>=26.0.0",
 ]
 
 [project.urls]
