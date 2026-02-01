@@ -586,24 +586,33 @@ class TestOntologyGenerator(unittest.TestCase):
         """Test XSD type mapping for various SQL types."""
         from rdflib.namespace import XSD
 
-        # Test integer mapping
-        self.assertEqual(self.generator._map_sql_to_xsd("INTEGER"), XSD.integer)
-        self.assertEqual(self.generator._map_sql_to_xsd("BIGINT"), XSD.integer)
+        # Test integer mapping (returns tuple of (type, override_info))
+        xsd_type, _ = self.generator._map_sql_to_xsd("INTEGER")
+        self.assertEqual(xsd_type, XSD.integer)
+        xsd_type, _ = self.generator._map_sql_to_xsd("BIGINT")
+        self.assertEqual(xsd_type, XSD.integer)
 
         # Test string mapping
-        self.assertEqual(self.generator._map_sql_to_xsd("VARCHAR(255)"), XSD.string)
-        self.assertEqual(self.generator._map_sql_to_xsd("TEXT"), XSD.string)
+        xsd_type, _ = self.generator._map_sql_to_xsd("VARCHAR(255)")
+        self.assertEqual(xsd_type, XSD.string)
+        xsd_type, _ = self.generator._map_sql_to_xsd("TEXT")
+        self.assertEqual(xsd_type, XSD.string)
 
         # Test boolean mapping
-        self.assertEqual(self.generator._map_sql_to_xsd("BOOLEAN"), XSD.boolean)
+        xsd_type, _ = self.generator._map_sql_to_xsd("BOOLEAN")
+        self.assertEqual(xsd_type, XSD.boolean)
 
         # Test datetime mapping
-        self.assertEqual(self.generator._map_sql_to_xsd("TIMESTAMP"), XSD.dateTime)
-        self.assertEqual(self.generator._map_sql_to_xsd("DATE"), XSD.date)
+        xsd_type, _ = self.generator._map_sql_to_xsd("TIMESTAMP")
+        self.assertEqual(xsd_type, XSD.dateTime)
+        xsd_type, _ = self.generator._map_sql_to_xsd("DATE")
+        self.assertEqual(xsd_type, XSD.date)
 
         # Test numeric mapping
-        self.assertEqual(self.generator._map_sql_to_xsd("DECIMAL(10,2)"), XSD.decimal)
-        self.assertEqual(self.generator._map_sql_to_xsd("FLOAT"), XSD.float)
+        xsd_type, _ = self.generator._map_sql_to_xsd("DECIMAL(10,2)")
+        self.assertEqual(xsd_type, XSD.decimal)
+        xsd_type, _ = self.generator._map_sql_to_xsd("FLOAT")
+        self.assertEqual(xsd_type, XSD.float)
 
     def test_clean_name_function(self):
         """Test name cleaning for URI generation with edge cases."""
