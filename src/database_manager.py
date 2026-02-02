@@ -1115,12 +1115,19 @@ class DatabaseManager:
                 columns = []
                 foreign_keys = []
 
-                # Log FK information for debugging
-                logger.debug(f"FK for {schema_name}.{table_name}: {len(table_fks)} constraints")
-                
+                # Log PK/FK information for debugging
+                logger.info(f"Table {schema_name}.{table_name}: PKs={primary_keys}, FKs={len(table_fks)} constraints")
+                if table_fks:
+                    for fk in table_fks:
+                        logger.info(f"  FK: {fk}")
+
+                # Normalize primary_keys to uppercase for case-insensitive matching (Snowflake uses uppercase)
+                primary_keys_upper = [pk.upper() for pk in primary_keys]
+
                 for col_info in table_columns:
                     column_name = col_info['name']
-                    is_pk = column_name in primary_keys
+                    # Case-insensitive PK matching
+                    is_pk = column_name.upper() in primary_keys_upper
                     
                     # Check for foreign keys
                     fk_table = None
@@ -1128,11 +1135,14 @@ class DatabaseManager:
                     is_fk = False
                     
                     for fk in table_fks:
-                        if column_name in fk.get('constrained_columns', []):
+                        # Case-insensitive FK matching
+                        constrained_cols_upper = [c.upper() for c in fk.get('constrained_columns', [])]
+                        if column_name.upper() in constrained_cols_upper:
                             is_fk = True
-                            fk_idx = fk['constrained_columns'].index(column_name)
+                            fk_idx = constrained_cols_upper.index(column_name.upper())
                             fk_table = fk.get('referred_table')
-                            fk_column = fk['referred_columns'][fk_idx] if fk.get('referred_columns') else None
+                            referred_cols = fk.get('referred_columns', [])
+                            fk_column = referred_cols[fk_idx] if fk_idx < len(referred_cols) else None
                             # Handle schema-qualified references (common in Snowflake)
                             fk_schema = fk.get('referred_schema')
                             if fk_table:
