@@ -88,20 +88,16 @@ class DatabaseManager:
         self._thread_pool = ThreadPoolExecutor(max_workers=5)
     
     def _log_sql_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> None:
-        """Log SQL query with parameters for debugging (with security sanitization)."""
+        """Log SQL query with parameters for debugging."""
         db_type = self.connection_info.get("type", "unknown")
-        
-        # Use security module to sanitize query for logging
-        validation = sql_validator.validate_query(query)
-        sanitized_query = validation.get('sanitized_query', query[:200])
-        
+
         if params:
-            # Sanitize parameters too
-            safe_params = {k: '***' if 'password' in k.lower() or 'secret' in k.lower() else v 
+            # Only sanitize sensitive parameters (passwords, secrets)
+            safe_params = {k: '***' if 'password' in k.lower() or 'secret' in k.lower() else v
                           for k, v in params.items()}
-            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {sanitized_query} | PARAMS: {safe_params}")
+            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {query} | PARAMS: {safe_params}")
         else:
-            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {sanitized_query}")
+            logger.info(f"🔍 {db_type.upper()} SQL QUERY: {query}")
     
     def _get_cache_key(self, operation: str, *args) -> str:
         """Generate cache key for metadata operations."""
@@ -995,6 +991,14 @@ class DatabaseManager:
                 columns = []
                 primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
                 foreign_keys = []
+
+                # Log FK information for debugging
+                if table_fks:
+                    logger.info(f"Found {len(table_fks)} foreign key constraints for table {table_name}")
+                    for fk in table_fks:
+                        logger.info(f"  FK: {fk}")
+                else:
+                    logger.debug(f"No foreign keys found for table {table_name}")
                 
                 for col_info in table_columns:
                     column_name = col_info['name']
@@ -1006,16 +1010,21 @@ class DatabaseManager:
                     is_fk = False
                     
                     for fk in table_fks:
-                        if column_name in fk['constrained_columns']:
+                        if column_name in fk.get('constrained_columns', []):
                             is_fk = True
                             fk_idx = fk['constrained_columns'].index(column_name)
-                            fk_table = fk['referred_table']
-                            fk_column = fk['referred_columns'][fk_idx]
-                            foreign_keys.append({
-                                "column": column_name,
-                                "referenced_table": fk_table,
-                                "referenced_column": fk_column
-                            })
+                            fk_table = fk.get('referred_table')
+                            fk_column = fk['referred_columns'][fk_idx] if fk.get('referred_columns') else None
+                            # Handle schema-qualified references (common in Snowflake)
+                            fk_schema = fk.get('referred_schema')
+                            if fk_table:
+                                foreign_keys.append({
+                                    "column": column_name,
+                                    "referenced_table": fk_table,
+                                    "referenced_column": fk_column,
+                                    "referenced_schema": fk_schema
+                                })
+                                logger.debug(f"Added FK: {column_name} -> {fk_schema}.{fk_table}.{fk_column}")
                             break
                     
                     column_info = ColumnInfo(

@@ -97,6 +97,10 @@ class OntologyGenerator:
         (r'^fk[_]?(.+)$', 'prefix_fk'),
         # Pattern: country_fk → country
         (r'^(.+?)[_]?fk$', 'suffix_fk'),
+        # Pattern: customer_sk → customer (TPC-DS style surrogate keys)
+        (r'^(.+?)(?:_)?sk$', 'suffix_sk'),
+        # Pattern: ss_customer_sk → customer (TPC-DS with table prefix)
+        (r'^[a-z]{1,3}_(.+?)(?:_)?sk$', 'tpcds_sk'),
     ]
 
     # Column name patterns that indicate quantities (should be integers)
@@ -326,41 +330,54 @@ class OntologyGenerator:
 
     def _add_relationship_to_ontology(self, table_uri: URIRef, fk: Dict[str, str], table_name: str):
         """Add a foreign key relationship as an object property with comprehensive database annotations."""
+        referenced_table = fk.get('referenced_table')
+        if not referenced_table:
+            logger.warning(f"FK from {table_name} missing referenced_table: {fk}")
+            return
+
         # Create descriptive relationship name
-        rel_name = f"{self._clean_name(table_name)}_has_{self._clean_name(fk['referenced_table'])}"
+        rel_name = f"{self._clean_name(table_name)}_has_{self._clean_name(referenced_table)}"
         prop_uri = self.base_uri[rel_name]
-        referenced_table_uri = self.base_uri[self._clean_name(fk['referenced_table'])]
+        referenced_table_uri = self.base_uri[self._clean_name(referenced_table)]
+
+        referenced_column = fk.get('referenced_column', 'id')
+        fk_column = fk.get('column', '')
+        referenced_schema = fk.get('referenced_schema')
 
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
         self.graph.add((prop_uri, RDFS.domain, table_uri))
         self.graph.add((prop_uri, RDFS.range, referenced_table_uri))
-        self.graph.add((prop_uri, RDFS.label, Literal(f"{table_name} has {fk['referenced_table']}")))
-        
+        self.graph.add((prop_uri, RDFS.label, Literal(f"{table_name} has {referenced_table}")))
+
         # Add comprehensive database-specific annotations for foreign keys
-        self.graph.add((prop_uri, self.db_ns.foreignKeyColumn, Literal(fk['column'])))
-        self.graph.add((prop_uri, self.db_ns.referencedTable, Literal(fk['referenced_table'])))
-        self.graph.add((prop_uri, self.db_ns.referencedColumn, Literal(fk['referenced_column'])))
-        
+        self.graph.add((prop_uri, self.db_ns.foreignKeyColumn, Literal(fk_column)))
+        self.graph.add((prop_uri, self.db_ns.referencedTable, Literal(referenced_table)))
+        self.graph.add((prop_uri, self.db_ns.referencedColumn, Literal(referenced_column)))
+        if referenced_schema:
+            self.graph.add((prop_uri, self.db_ns.referencedSchema, Literal(referenced_schema)))
+
         # Add SQL join condition
-        join_condition = f"{table_name}.{fk['column']} = {fk['referenced_table']}.{fk['referenced_column']}"
+        join_condition = f"{table_name}.{fk_column} = {referenced_table}.{referenced_column}"
         self.graph.add((prop_uri, self.db_ns.sqlJoinCondition, Literal(join_condition)))
-        
+
         # Add relationship type annotation
         self.graph.add((prop_uri, self.db_ns.relationshipType, Literal("many_to_one")))
-        
+
         # Add inverse relationship
-        inverse_rel_name = f"{self._clean_name(fk['referenced_table'])}_referenced_by_{self._clean_name(table_name)}"
+        inverse_rel_name = f"{self._clean_name(referenced_table)}_referenced_by_{self._clean_name(table_name)}"
         inverse_prop_uri = self.base_uri[inverse_rel_name]
         self.graph.add((inverse_prop_uri, RDF.type, OWL.ObjectProperty))
         self.graph.add((inverse_prop_uri, RDFS.domain, referenced_table_uri))
         self.graph.add((inverse_prop_uri, RDFS.range, table_uri))
-        self.graph.add((inverse_prop_uri, RDFS.label, Literal(f"{fk['referenced_table']} referenced by {table_name}")))
-        
+        self.graph.add((inverse_prop_uri, RDFS.label, Literal(f"{referenced_table} referenced by {table_name}")))
+
         # Add database annotations for inverse relationship
         self.graph.add((inverse_prop_uri, self.db_ns.relationshipType, Literal("one_to_many")))
-        
+
         # Link them as inverses
         self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
+
+        logger.debug(f"Added declared FK relationship: {table_name}.{fk_column} -> {referenced_table}.{referenced_column}")
 
     def _clean_name(self, name: str) -> str:
         """Clean a name to make it suitable for URIs."""
@@ -476,6 +493,8 @@ class OntologyGenerator:
             reverse=True
         )
 
+        logger.debug(f"FK inference: Table name variations: {list(table_name_variations.keys())}")
+
         for table in tables_info:
             for col in table.columns:
                 # Skip if already has declared FK
@@ -489,6 +508,10 @@ class OntologyGenerator:
                 col_lower = col.name.lower()
                 found_match = False
 
+                # Log columns that look like potential FKs
+                if 'id' in col_lower and not col.is_primary_key:
+                    logger.debug(f"FK inference: Checking column {table.name}.{col.name}")
+
                 # First try: look for embedded table names (or variations) in the column
                 for target_name, target_table in sorted_variations:
                     if target_table.name.lower() == table.name.lower():
@@ -499,12 +522,12 @@ class OntologyGenerator:
                         continue
 
                     # Check if table name variation is embedded in column name
-                    # Pattern: <prefix><tablename>id or <prefix><tablename>_id
+                    # Pattern: <prefix><tablename>id or <prefix><tablename>_id or <tablename>_sk
                     if target_name in col_lower:
-                        # Check if followed by 'id' or '_id'
+                        # Check if followed by 'id', '_id', 'sk', '_sk' or empty
                         idx = col_lower.find(target_name)
                         suffix = col_lower[idx + len(target_name):]
-                        if suffix in ['id', '_id', '']:
+                        if suffix in ['id', '_id', 'sk', '_sk', '']:
                             target_pk = target_table.primary_keys
                             target_column = target_pk[0] if target_pk else 'id'
 

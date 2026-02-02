@@ -211,6 +211,10 @@ class TestMCPToolsAsync:
         session.obqc_validator = None
         session.loaded_ontology = None
         session.loaded_ontology_path = None
+        # Mock cache methods - return None to simulate no cache
+        session.get_cached_schema = Mock(return_value=None)
+        session.cache_schema_analysis = Mock()
+        session.clear_schema_cache = Mock()
         return session
 
     async def test_connect_database_postgresql_success(self, mock_ctx, mock_session_data):

@@ -354,6 +354,31 @@ class SessionData:
         # Loaded ontology from external file (via load_my_ontology)
         self.loaded_ontology: Optional[str] = None  # TTL content
         self.loaded_ontology_path: Optional[str] = None  # File path
+        # Cached schema analysis results (to avoid re-querying)
+        self._cached_schema: Optional[Dict[str, List[TableInfo]]] = None  # schema_name -> tables
+
+    def cache_schema_analysis(self, schema_name: str, tables_info: List[TableInfo]) -> None:
+        """Cache schema analysis results for reuse."""
+        if self._cached_schema is None:
+            self._cached_schema = {}
+        cache_key = schema_name or "_default_"
+        self._cached_schema[cache_key] = tables_info
+        logger.debug(f"Cached schema analysis for '{cache_key}': {len(tables_info)} tables")
+
+    def get_cached_schema(self, schema_name: str) -> Optional[List[TableInfo]]:
+        """Get cached schema analysis results if available."""
+        if self._cached_schema is None:
+            return None
+        cache_key = schema_name or "_default_"
+        cached = self._cached_schema.get(cache_key)
+        if cached:
+            logger.debug(f"Using cached schema for '{cache_key}': {len(cached)} tables")
+        return cached
+
+    def clear_schema_cache(self) -> None:
+        """Clear cached schema analysis (e.g., on reconnect)."""
+        self._cached_schema = None
+        logger.debug("Cleared schema cache")
 
 
 def get_session_id(ctx: Context) -> str:
@@ -679,6 +704,9 @@ async def connect_database(ctx: Context, db_type: str) -> str:
         db_name = "DREMIO"
 
     if success:
+        # Clear any cached schema from previous connection
+        session = get_session_data(ctx)
+        session.clear_schema_cache()
         await ctx.info(f"Database connected successfully; next call should be list_schemas or analyze_schema")
         return f"Successfully connected to {db_type} database: {db_name}"
     else:
@@ -827,6 +855,10 @@ async def analyze_schema(
         "table_count": len(all_table_info),
         "tables": all_table_info
     }
+
+    # Cache the TableInfo objects for reuse by generate_ontology
+    session = get_session_data(ctx)
+    session.cache_schema_analysis(schema_name or "", table_info_objects)
 
     # Save schema analysis to output folder (without guidance data)
     schema_filename = None
@@ -996,32 +1028,43 @@ async def generate_ontology(
                 "parameter_error"
             )
     else:
-        # Fall back to fetching from database
-        db_manager = get_session_db_manager(ctx)
-        
-        if not db_manager.has_engine():
-            return create_error_response(
-                "No database connection established and no schema_info provided. Please use connect_database tool first or provide schema_info parameter.",
-                "connection_error"
-            )
-        
-        try:
-            tables = db_manager.get_tables(schema_name)
-            logger.info(f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}")
-            
-            for table_name in tables:
-                try:
-                    table_info = db_manager.analyze_table(table_name, schema_name)
-                    if table_info:
-                        tables_info.append(table_info)
-                except Exception as e:
-                    logger.error(f"Failed to analyze table {table_name}: {e}")
-                    
-        except Exception as e:
-            return create_error_response(
-                f"Failed to get tables from database: {str(e)}",
-                "database_error"
-            )
+        # Try to use cached schema analysis from previous analyze_schema call
+        session = get_session_data(ctx)
+        cached_tables = session.get_cached_schema(schema_name or "")
+
+        if cached_tables:
+            tables_info = cached_tables
+            logger.info(f"Using cached schema analysis: {len(tables_info)} tables")
+        else:
+            # Fall back to fetching from database
+            db_manager = get_session_db_manager(ctx)
+
+            if not db_manager.has_engine():
+                return create_error_response(
+                    "No database connection established and no schema_info provided. Please use connect_database tool first or provide schema_info parameter.",
+                    "connection_error"
+                )
+
+            try:
+                tables = db_manager.get_tables(schema_name)
+                logger.info(f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}")
+
+                for table_name in tables:
+                    try:
+                        table_info = db_manager.analyze_table(table_name, schema_name)
+                        if table_info:
+                            tables_info.append(table_info)
+                    except Exception as e:
+                        logger.error(f"Failed to analyze table {table_name}: {e}")
+
+                # Cache for future use
+                session.cache_schema_analysis(schema_name or "", tables_info)
+
+            except Exception as e:
+                return create_error_response(
+                    f"Failed to get tables from database: {str(e)}",
+                    "database_error"
+                )
 
     if not tables_info:
         return create_error_response(

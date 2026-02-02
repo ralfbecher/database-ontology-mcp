@@ -521,6 +521,128 @@ class TestQualityReport(unittest.TestCase):
         self.assertEqual(result["summary"]["denormalized_field_count"], 0)
 
 
+class TestTPCDSPatterns(unittest.TestCase):
+    """Test suite for TPC-DS style naming patterns (_sk suffix)."""
+
+    def setUp(self):
+        self.generator = OntologyGenerator()
+
+    def _create_tpcds_tables(self):
+        """Create TPC-DS style test tables."""
+        customer = TableInfo(
+            name="CUSTOMER",
+            schema="TPCDS",
+            columns=[
+                ColumnInfo(
+                    name="c_customer_sk",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False
+                ),
+                ColumnInfo(
+                    name="c_customer_id",
+                    data_type="VARCHAR(16)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False
+                )
+            ],
+            primary_keys=["c_customer_sk"],
+            foreign_keys=[]
+        )
+
+        item = TableInfo(
+            name="ITEM",
+            schema="TPCDS",
+            columns=[
+                ColumnInfo(
+                    name="i_item_sk",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False
+                ),
+                ColumnInfo(
+                    name="i_item_id",
+                    data_type="VARCHAR(16)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False
+                )
+            ],
+            primary_keys=["i_item_sk"],
+            foreign_keys=[]
+        )
+
+        store_sales = TableInfo(
+            name="STORE_SALES",
+            schema="TPCDS",
+            columns=[
+                ColumnInfo(
+                    name="ss_sold_date_sk",
+                    data_type="INTEGER",
+                    is_nullable=True,
+                    is_primary_key=False,
+                    is_foreign_key=False
+                ),
+                ColumnInfo(
+                    name="ss_customer_sk",
+                    data_type="INTEGER",
+                    is_nullable=True,
+                    is_primary_key=False,
+                    is_foreign_key=False
+                ),
+                ColumnInfo(
+                    name="ss_item_sk",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False
+                )
+            ],
+            primary_keys=[],
+            foreign_keys=[]
+        )
+
+        return [customer, item, store_sales]
+
+    def test_tpcds_sk_pattern_detection(self):
+        """Test detection of TPC-DS style _sk foreign keys."""
+        tables = self._create_tpcds_tables()
+        self.generator._build_table_lookup(tables)
+
+        inferred = self.generator._infer_implicit_relationships(tables)
+
+        # Should find ss_customer_sk -> CUSTOMER
+        customer_rels = [r for r in inferred if r.target_table == "CUSTOMER"]
+        self.assertGreaterEqual(len(customer_rels), 1)
+        self.assertEqual(customer_rels[0].source_table, "STORE_SALES")
+        self.assertEqual(customer_rels[0].column, "ss_customer_sk")
+
+        # Should find ss_item_sk -> ITEM
+        item_rels = [r for r in inferred if r.target_table == "ITEM"]
+        self.assertGreaterEqual(len(item_rels), 1)
+        self.assertEqual(item_rels[0].source_table, "STORE_SALES")
+        self.assertEqual(item_rels[0].column, "ss_item_sk")
+
+    def test_tpcds_relationships_in_ontology(self):
+        """Test that TPC-DS relationships are added to the ontology."""
+        tables = self._create_tpcds_tables()
+
+        self.generator.generate_from_schema(tables, include_inferred_relationships=True)
+
+        db_ns = self.generator.db_ns
+        base = self.generator.base_uri
+
+        # Check STORE_SALES -> CUSTOMER relationship
+        rel_uri = base["STORE_SALES_has_CUSTOMER"]
+        self.assertIn(
+            (rel_uri, RDF.type, OWL.ObjectProperty),
+            self.generator.graph
+        )
+
+
 class TestTableLookup(unittest.TestCase):
     """Test suite for table name lookup with pluralization handling."""
 
