@@ -93,6 +93,38 @@ Key environment variables (see `.env.template`):
 - Google-style docstrings
 - Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`
 
+## Implementation Guidelines
+
+**IMPORTANT: Plan thoroughly before coding!**
+
+When implementing changes, ALWAYS:
+
+1. **Trace all code paths**: Before modifying a function, identify ALL places it's called from and ALL branches within it (success path, error path, fallback path, cache hit/miss, etc.)
+
+2. **Consider database-specific behavior**: This codebase supports PostgreSQL, Snowflake, and Dremio. Each has different:
+   - Case sensitivity (Snowflake uses UPPERCASE identifiers)
+   - Query syntax (SHOW commands, information_schema differences)
+   - Caching behavior (schema-level vs table-level queries)
+
+3. **Check cache implications**: When adding caching:
+   - What happens on cache HIT?
+   - What happens on cache MISS (fallback)?
+   - Is the fallback path equally efficient?
+   - Are cache keys consistent across related functions?
+
+4. **Handle session state**: Changes to `SessionData` must consider:
+   - When state is set (which tool sets it?)
+   - When state is used (which tools depend on it?)
+   - When state should be cleared (reconnect, new session?)
+
+5. **Test edge cases**: Don't just test the happy path. Consider:
+   - Empty results
+   - Missing parameters (None/empty string)
+   - Case sensitivity mismatches
+   - Network/query failures
+
+**Avoid incremental fixes** - solve problems completely the first time by understanding the full scope before writing code.
+
 ## Dependencies
 
 Core: `fastmcp>=2.13.2`, `sqlalchemy>=2.0.36`, `rdflib>=7.1.0`, `pydantic>=2.10.0`
