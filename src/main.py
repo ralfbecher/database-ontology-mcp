@@ -825,6 +825,42 @@ async def analyze_schema(
 
     Ontology context improves SQL accuracy and helps prevent data corruption.
     """
+    # Check if schema is already cached - return early with guidance
+    session = get_session_data(ctx)
+    effective_schema = schema_name or ""
+    cached_tables = session.get_cached_schema(effective_schema)
+
+    if cached_tables:
+        # Schema already analyzed - return cache hit response
+        await ctx.info(f"Schema '{effective_schema or 'default'}' already cached with {len(cached_tables)} tables - skipping re-analysis")
+        return {
+            "schema": effective_schema or "default",
+            "table_count": len(cached_tables),
+            "cache_hit": True,
+            "message": f"Schema already analyzed and CACHED ({len(cached_tables)} tables). No need to re-analyze.",
+            "schema_file": session.schema_file,
+            "r2rml_file": session.r2rml_file,
+            "next_steps": {
+                "recommended": "generate_ontology",
+                "reason": "Schema is already cached - proceed directly to ontology generation",
+                "workflow": [
+                    "1. analyze_schema (ALREADY DONE - cached)",
+                    "2. generate_ontology (DO THIS NOW - will use cached schema)",
+                    "3. suggest_semantic_names (for enrichment)",
+                    "4. apply_semantic_names (to finalize)"
+                ]
+            },
+            "cache_hint": (
+                "STOP! Schema is ALREADY CACHED. Do NOT call analyze_schema again. "
+                "Proceed directly to generate_ontology() - it will use the cached schema automatically."
+            ),
+            "analytical_guidance": (
+                "Schema analysis is COMPLETE and CACHED.\n\n"
+                "NEXT STEP: Call generate_ontology() now - NO parameters needed!\n\n"
+                "Do NOT call analyze_schema again - the data is already cached."
+            )
+        }
+
     db_manager = get_session_db_manager(ctx)
     tables = db_manager.get_tables(schema_name)
 
@@ -1003,12 +1039,27 @@ async def generate_ontology(
         After analyze_schema(): Just call generate_ontology() - cached schema is used automatically
         Without analyze_schema(): Provide schema_info or ensure database is connected
     """
+    # Check if ontology is already generated - return early with guidance
+    session = get_session_data(ctx)
+    if session.ontology_file:
+        await ctx.info(f"Ontology already generated: {session.ontology_file} - skipping regeneration")
+        return (
+            f"# ONTOLOGY ALREADY GENERATED\n\n"
+            f"Ontology file: {session.ontology_file}\n\n"
+            f"The ontology was already generated in this session and is CACHED.\n"
+            f"Do NOT call generate_ontology again!\n\n"
+            f"## NEXT STEPS:\n"
+            f"1. Call suggest_semantic_names() to review names for enrichment\n"
+            f"2. Call apply_semantic_names(suggestions) with your improvements\n\n"
+            f"The cached ontology will be used automatically."
+        )
+
     # Validate base_uri
     if not base_uri.endswith('/'):
         base_uri += '/'
-    
+
     tables_info = []
-    
+
     if schema_info:
         # Use provided schema information
         try:
