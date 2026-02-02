@@ -1737,50 +1737,67 @@ class DatabaseManager:
             self._log_sql_query(query_to_execute)
             with self.get_connection() as conn:
                 result = conn.execute(text(query_to_execute))
-                
-                if result.returns_rows:
-                    # Handle SELECT-type queries
-                    result_data["columns"] = list(result.keys())
-                    
-                    rows = []
-                    row_count = 0
-                    for row in result.fetchall():
-                        row_count += 1
-                        row_dict = {}
-                        for i, value in enumerate(row):
-                            column_name = result_data["columns"][i]
-                            # Serialize complex data types
-                            if value is not None:
-                                if isinstance(value, decimal.Decimal):  # decimal/numeric types
-                                    row_dict[column_name] = float(value)
-                                elif hasattr(value, 'isoformat'):  # datetime/date objects
-                                    row_dict[column_name] = value.isoformat()
-                                elif isinstance(value, (bytes, bytearray)):  # binary data
-                                    row_dict[column_name] = f"<binary:{len(value)} bytes>"
-                                elif isinstance(value, (dict, list)):  # JSON/array types
-                                    row_dict[column_name] = value
-                                elif hasattr(value, '__dict__'):  # Complex objects
-                                    row_dict[column_name] = str(value)
+
+                try:
+                    if result.returns_rows:
+                        # Handle SELECT-type queries
+                        result_data["columns"] = list(result.keys())
+
+                        # Fetch all rows at once to avoid generator issues with complex queries
+                        try:
+                            raw_rows = result.fetchall()
+                        except Exception as fetch_error:
+                            logger.error(f"Error fetching results: {fetch_error}")
+                            # Try to close result cursor explicitly
+                            try:
+                                result.close()
+                            except Exception:
+                                pass
+                            raise
+
+                        rows = []
+                        for row in raw_rows:
+                            row_dict = {}
+                            for i, value in enumerate(row):
+                                column_name = result_data["columns"][i]
+                                # Serialize complex data types
+                                if value is not None:
+                                    if isinstance(value, decimal.Decimal):  # decimal/numeric types
+                                        row_dict[column_name] = float(value)
+                                    elif hasattr(value, 'isoformat'):  # datetime/date objects
+                                        row_dict[column_name] = value.isoformat()
+                                    elif isinstance(value, (bytes, bytearray)):  # binary data
+                                        row_dict[column_name] = f"<binary:{len(value)} bytes>"
+                                    elif isinstance(value, (dict, list)):  # JSON/array types
+                                        row_dict[column_name] = value
+                                    elif hasattr(value, '__dict__'):  # Complex objects
+                                        row_dict[column_name] = str(value)
+                                    else:
+                                        row_dict[column_name] = value
                                 else:
-                                    row_dict[column_name] = value
-                            else:
-                                row_dict[column_name] = None
-                        rows.append(row_dict)
-                    
-                    result_data["data"] = rows
-                    result_data["row_count"] = row_count
-                    
-                    if row_count == limit and result_data["limit_applied"]:
-                        result_data["warnings"].append(f"Result set may be truncated at {limit} rows")
-                        
-                else:
-                    # Handle non-returning queries (EXPLAIN, etc.)
-                    result_data["row_count"] = getattr(result, 'rowcount', 0)
-                
+                                    row_dict[column_name] = None
+                            rows.append(row_dict)
+
+                        result_data["data"] = rows
+                        result_data["row_count"] = len(rows)
+
+                        if result_data["row_count"] == limit and result_data["limit_applied"]:
+                            result_data["warnings"].append(f"Result set may be truncated at {limit} rows")
+
+                    else:
+                        # Handle non-returning queries (EXPLAIN, etc.)
+                        result_data["row_count"] = getattr(result, 'rowcount', 0)
+                finally:
+                    # Ensure result cursor is closed
+                    try:
+                        result.close()
+                    except Exception:
+                        pass
+
                 end_time = time.time()
                 result_data["execution_time_ms"] = round((end_time - start_time) * 1000, 2)
                 result_data["success"] = True
-                
+
                 logger.info(f"SQL query executed: {result_data['row_count']} rows in {result_data['execution_time_ms']}ms")
                 
         except (SQLAlchemyError, ProgrammingError) as e:
