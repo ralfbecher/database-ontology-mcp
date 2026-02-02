@@ -714,8 +714,13 @@ async def connect_database(ctx: Context, db_type: str) -> str:
         # Clear any cached schema from previous connection
         session = get_session_data(ctx)
         session.clear_schema_cache()
-        await ctx.info(f"Database connected successfully; next call should be list_schemas or analyze_schema")
-        return f"Successfully connected to {db_type} database: {db_name}"
+        await ctx.info(f"Database connected; next call: generate_ontology(schema_name='YOUR_SCHEMA')")
+        return (
+            f"Successfully connected to {db_type} database: {db_name}\n\n"
+            f"NEXT STEP: Call generate_ontology(schema_name='YOUR_SCHEMA')\n"
+            f"This will auto-analyze the schema AND generate the ontology in one step!\n"
+            f"You do NOT need to call analyze_schema separately."
+        )
     else:
         await ctx.info(f"Database connection failed; check credentials and try again")
         return create_error_response(
@@ -1074,23 +1079,23 @@ async def generate_ontology(
     schema_name: Optional[str] = None,
     base_uri: str = "http://example.com/ontology/"
 ) -> str:
-    """Generate an RDF ontology from database schema information and stores it into a ttl file.
+    """Generate an RDF ontology from database schema. AUTO-ANALYZES schema if needed!
 
-    IMPORTANT: If analyze_schema was called earlier in this session, the schema is CACHED
-    and will be used automatically. You do NOT need to pass schema_info or call analyze_schema
-    again - just call generate_ontology() with no parameters!
+    *** SIMPLIFIED WORKFLOW - Only 2 tools needed! ***
+
+    After connect_database(), just call:
+    1. generate_ontology(schema_name="YOUR_SCHEMA") → Auto-analyzes AND generates ontology!
+    2. suggest_semantic_names(ontology_file="...") → For enrichment
+
+    You do NOT need to call analyze_schema separately - this tool does it automatically!
 
     Args:
-        schema_info: JSON string containing schema information (optional - uses cached schema if available)
-        schema_name: Name of the schema (optional - uses cached schema if available)
+        schema_name: Name of the schema to analyze and generate ontology for
+        schema_info: Optional pre-analyzed schema JSON (usually not needed)
         base_uri: Base URI for the ontology (default: http://example.com/ontology/)
 
     Returns:
-        RDF ontology in Turtle format or error response
-
-    Usage:
-        After analyze_schema(): Just call generate_ontology() - cached schema is used automatically
-        Without analyze_schema(): Provide schema_info or ensure database is connected
+        RDF ontology in Turtle format with ontology_file name for enrichment tools
     """
     # Check if ontology is already generated - return early with guidance
     session = get_session_data(ctx)
