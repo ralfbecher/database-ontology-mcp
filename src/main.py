@@ -356,6 +356,7 @@ class SessionData:
         self.loaded_ontology_path: Optional[str] = None  # File path
         # Cached schema analysis results (to avoid re-querying)
         self._cached_schema: Optional[Dict[str, List[TableInfo]]] = None  # schema_name -> tables
+        self._last_analyzed_schema: Optional[str] = None  # Store last analyzed schema name
 
     def cache_schema_analysis(self, schema_name: str, tables_info: List[TableInfo]) -> None:
         """Cache schema analysis results for reuse."""
@@ -363,6 +364,7 @@ class SessionData:
             self._cached_schema = {}
         cache_key = schema_name or "_default_"
         self._cached_schema[cache_key] = tables_info
+        self._last_analyzed_schema = schema_name  # Remember the schema name
         logger.debug(f"Cached schema analysis for '{cache_key}': {len(tables_info)} tables")
 
     def get_cached_schema(self, schema_name: str) -> Optional[List[TableInfo]]:
@@ -378,7 +380,12 @@ class SessionData:
     def clear_schema_cache(self) -> None:
         """Clear cached schema analysis (e.g., on reconnect)."""
         self._cached_schema = None
+        self._last_analyzed_schema = None
         logger.debug("Cleared schema cache")
+
+    def get_last_analyzed_schema(self) -> Optional[str]:
+        """Get the name of the last analyzed schema."""
+        return self._last_analyzed_schema
 
 
 def get_session_id(ctx: Context) -> str:
@@ -1049,14 +1056,26 @@ async def generate_ontology(
     else:
         # Try to use cached schema analysis from previous analyze_schema call
         session = get_session_data(ctx)
-        cached_tables = session.get_cached_schema(schema_name or "")
+
+        # If schema_name not provided, use the last analyzed schema
+        effective_schema = schema_name
+        if not effective_schema:
+            effective_schema = session.get_last_analyzed_schema()
+            if effective_schema:
+                logger.info(f"Using last analyzed schema: {effective_schema}")
+
+        cached_tables = session.get_cached_schema(effective_schema or "")
 
         if cached_tables:
+            # Update schema_name to the effective one for later use
+            schema_name = effective_schema
             tables_info = cached_tables
             logger.info(f"Using CACHED schema from analyze_schema: {len(tables_info)} tables (no re-query needed)")
             await ctx.info(f"Using cached schema: {len(tables_info)} tables - no database queries needed")
         else:
             # Fall back to fetching from database
+            # Use effective_schema if schema_name was not provided
+            schema_name = effective_schema or schema_name
             db_manager = get_session_db_manager(ctx)
 
             if not db_manager.has_engine():
