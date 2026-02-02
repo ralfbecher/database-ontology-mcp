@@ -941,13 +941,21 @@ async def analyze_schema(
             "recommended": "generate_ontology",
             "reason": "Generate ontology with database schema linking for accurate SQL generation and fan-trap prevention",
             "workflow": [
-                "1. analyze_schema (completed)",
-                "2. generate_ontology (recommended next)",
+                "1. analyze_schema (completed - schema is now CACHED)",
+                "2. generate_ontology (recommended next - will use cached schema automatically)",
                 "3. execute_sql_query (with ontology context)"
             ]
         }
+        schema_result["schema_cached"] = True
+        schema_result["cache_hint"] = (
+            "IMPORTANT: Schema analysis is now CACHED for this session. "
+            "Do NOT call analyze_schema again - just call generate_ontology() directly. "
+            "It will automatically use the cached schema data."
+        )
         schema_result["analytical_guidance"] = (
-            "Recommended next step: Run generate_ontology()\n\n"
+            "Recommended next step: Run generate_ontology() - NO parameters needed!\n\n"
+            "The schema is CACHED - generate_ontology will use it automatically.\n"
+            "Do NOT call analyze_schema again.\n\n"
             "This will create an ontology with:\n"
             "- Database schema linking (db: namespace)\n"
             "- SQL column references for queries\n"
@@ -956,7 +964,7 @@ async def analyze_schema(
             "The ontology provides context for accurate SQL generation."
         )
         schema_result["next_tool"] = "generate_ontology"
-        await ctx.info(f"Schema analysis complete with {len(all_table_info)} tables; next call should be generate_ontology")
+        await ctx.info(f"Schema CACHED with {len(all_table_info)} tables. Next: generate_ontology() - no need to pass schema data, it's cached!")
     else:
         await ctx.info("Schema analysis found no tables")
 
@@ -971,15 +979,22 @@ async def generate_ontology(
     base_uri: str = "http://example.com/ontology/"
 ) -> str:
     """Generate an RDF ontology from database schema information and stores it into a ttl file.
-    
+
+    IMPORTANT: If analyze_schema was called earlier in this session, the schema is CACHED
+    and will be used automatically. You do NOT need to pass schema_info or call analyze_schema
+    again - just call generate_ontology() with no parameters!
+
     Args:
-        schema_info: JSON string containing schema information (tables, columns, relationships) 
-                    If not provided, will attempt to fetch from connected database
-        schema_name: Name of the schema to generate ontology from (optional)
+        schema_info: JSON string containing schema information (optional - uses cached schema if available)
+        schema_name: Name of the schema (optional - uses cached schema if available)
         base_uri: Base URI for the ontology (default: http://example.com/ontology/)
-    
+
     Returns:
         RDF ontology in Turtle format or error response
+
+    Usage:
+        After analyze_schema(): Just call generate_ontology() - cached schema is used automatically
+        Without analyze_schema(): Provide schema_info or ensure database is connected
     """
     # Validate base_uri
     if not base_uri.endswith('/'):
@@ -1038,7 +1053,8 @@ async def generate_ontology(
 
         if cached_tables:
             tables_info = cached_tables
-            logger.info(f"Using cached schema analysis: {len(tables_info)} tables")
+            logger.info(f"Using CACHED schema from analyze_schema: {len(tables_info)} tables (no re-query needed)")
+            await ctx.info(f"Using cached schema: {len(tables_info)} tables - no database queries needed")
         else:
             # Fall back to fetching from database
             db_manager = get_session_db_manager(ctx)
@@ -1126,9 +1142,11 @@ async def generate_ontology(
             result += f"\n\n# ⚠️ SEMANTIC NAME RESOLUTION RECOMMENDED"
             result += f"\n# Found {cryptic_count} names that may be abbreviations or cryptic identifiers."
             result += f"\n# To improve ontology readability for business users:"
-            result += f"\n# 1. Call suggest_semantic_names() to extract names for review"
+            result += f"\n# 1. Call suggest_semantic_names() - NO parameters needed, ontology is CACHED"
             result += f"\n# 2. Review the suggestions and provide business-friendly alternatives"
             result += f"\n# 3. Call apply_semantic_names() with your suggestions"
+            result += f"\n#"
+            result += f"\n# IMPORTANT: Do NOT call analyze_schema again! The ontology is cached in session."
             result += f"\n#"
             result += f"\n# Analysis summary:"
             result += f"\n#   - Classes needing review: {name_analysis['summary']['classes_needing_review']}"
@@ -1149,6 +1167,9 @@ async def suggest_semantic_names(
     ctx: Context
 ) -> Dict[str, Any]:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
+
+    IMPORTANT: This tool uses the CACHED ontology from generate_ontology().
+    Do NOT call analyze_schema again - just call this tool directly!
 
     This tool analyzes the ontology from session context (set by generate_ontology) and returns
     a structured list of all class, property, and relationship names along with analysis of
