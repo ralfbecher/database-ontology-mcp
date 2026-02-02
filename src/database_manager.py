@@ -948,7 +948,83 @@ class DatabaseManager:
         except SQLAlchemyError as e:
             logger.error(f"Failed to get tables: {e}")
             return []
-    
+
+    def prefetch_schema_constraints(self, schema_name: str) -> None:
+        """Prefetch all PKs and FKs for a schema at once (Snowflake optimization).
+
+        This avoids repeated SHOW PRIMARY KEYS/IMPORTED KEYS queries for each table.
+        Results are cached and used by analyze_table.
+        """
+        db_type = self.connection_info.get("type", "")
+        if db_type != "snowflake":
+            return  # Only needed for Snowflake
+
+        pk_cache_key = self._get_cache_key("schema_pks", schema_name)
+        fk_cache_key = self._get_cache_key("schema_fks", schema_name)
+
+        # Skip if already cached
+        if self._get_from_cache(pk_cache_key) is not None:
+            logger.debug(f"Schema constraints already cached for {schema_name}")
+            return
+
+        logger.info(f"Prefetching PKs and FKs for schema {schema_name}")
+
+        try:
+            with self.get_connection() as conn:
+                # Fetch all PKs for the schema at once
+                pk_by_table: Dict[str, List[str]] = {}
+                try:
+                    pk_query = text(f'SHOW PRIMARY KEYS IN SCHEMA "{schema_name}"')
+                    self._log_sql_query(str(pk_query))
+                    result = conn.execute(pk_query)
+                    for row in result.fetchall():
+                        row_dict = row._asdict() if hasattr(row, '_asdict') else dict(row._mapping)
+                        table = row_dict.get('table_name')
+                        column = row_dict.get('column_name')
+                        if table and column:
+                            if table not in pk_by_table:
+                                pk_by_table[table] = []
+                            pk_by_table[table].append(column)
+                    logger.info(f"Prefetched PKs for {len(pk_by_table)} tables")
+                except Exception as e:
+                    logger.warning(f"Failed to prefetch PKs: {e}")
+
+                self._store_in_cache(pk_cache_key, pk_by_table)
+
+                # Fetch all FKs for the schema at once
+                fk_by_table: Dict[str, List[Dict]] = {}
+                try:
+                    fk_query = text(f'SHOW IMPORTED KEYS IN SCHEMA "{schema_name}"')
+                    self._log_sql_query(str(fk_query))
+                    result = conn.execute(fk_query)
+                    for row in result.fetchall():
+                        row_dict = row._asdict() if hasattr(row, '_asdict') else dict(row._mapping)
+                        fk_table = row_dict.get('fk_table_name')
+                        pk_table = row_dict.get('pk_table_name')
+                        pk_column = row_dict.get('pk_column_name')
+                        pk_schema = row_dict.get('pk_schema_name')
+                        fk_column = row_dict.get('fk_column_name')
+                        fk_name = row_dict.get('fk_name')
+
+                        if fk_table and pk_table and fk_column:
+                            if fk_table not in fk_by_table:
+                                fk_by_table[fk_table] = []
+                            fk_by_table[fk_table].append({
+                                'constrained_columns': [fk_column],
+                                'referred_schema': pk_schema,
+                                'referred_table': pk_table,
+                                'referred_columns': [pk_column],
+                                'name': fk_name
+                            })
+                    logger.info(f"Prefetched FKs for {len(fk_by_table)} tables")
+                except Exception as e:
+                    logger.warning(f"Failed to prefetch FKs: {e}")
+
+                self._store_in_cache(fk_cache_key, fk_by_table)
+
+        except SQLAlchemyError as e:
+            logger.error(f"Failed to prefetch schema constraints: {e}")
+
     def analyze_table(self, table_name: str, schema_name: Optional[str] = None) -> Optional[TableInfo]:
         """Analyze a specific table and return detailed information."""
         logger.debug(f"analyze_table: Starting analysis of {table_name}, has_engine: {self.has_engine()}, dremio_rest: {bool(self._dremio_rest_connection)}")
@@ -970,70 +1046,62 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 # Use SQLAlchemy inspector for safer metadata reflection
                 inspector = inspect(self.engine)
-                
+                db_type = self.connection_info.get("type", "")
+
                 # Get table metadata using inspector
                 if schema_name:
                     if not inspector.has_table(table_name, schema=schema_name):
                         logger.error(f"Table {schema_name}.{table_name} not found")
                         return None
                     table_columns = inspector.get_columns(table_name, schema=schema_name)
-                    table_pk = inspector.get_pk_constraint(table_name, schema=schema_name)
-                    table_fks = inspector.get_foreign_keys(table_name, schema=schema_name)
                 else:
                     if not inspector.has_table(table_name):
                         logger.error(f"Table {table_name} not found")
                         return None
                     table_columns = inspector.get_columns(table_name)
-                    table_pk = inspector.get_pk_constraint(table_name)
-                    table_fks = inspector.get_foreign_keys(table_name)
-                
+
+                # Get PKs and FKs - use cache for Snowflake to avoid repeated schema queries
+                primary_keys = []
+                table_fks = []
+
+                if db_type == "snowflake" and schema_name:
+                    # Try to get from prefetched cache first
+                    pk_cache_key = self._get_cache_key("schema_pks", schema_name)
+                    fk_cache_key = self._get_cache_key("schema_fks", schema_name)
+
+                    cached_pks = self._get_from_cache(pk_cache_key)
+                    cached_fks = self._get_from_cache(fk_cache_key)
+
+                    if cached_pks is not None:
+                        primary_keys = cached_pks.get(table_name, [])
+                        logger.debug(f"Using cached PKs for {table_name}: {primary_keys}")
+                    else:
+                        # Fallback to inspector (will trigger SHOW query)
+                        table_pk = inspector.get_pk_constraint(table_name, schema=schema_name)
+                        primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
+
+                    if cached_fks is not None:
+                        table_fks = cached_fks.get(table_name, [])
+                        logger.debug(f"Using cached FKs for {table_name}: {len(table_fks)} constraints")
+                    else:
+                        # Fallback to inspector (will trigger SHOW query)
+                        table_fks = inspector.get_foreign_keys(table_name, schema=schema_name)
+                else:
+                    # Non-Snowflake: use inspector directly
+                    if schema_name:
+                        table_pk = inspector.get_pk_constraint(table_name, schema=schema_name)
+                        table_fks = inspector.get_foreign_keys(table_name, schema=schema_name)
+                    else:
+                        table_pk = inspector.get_pk_constraint(table_name)
+                        table_fks = inspector.get_foreign_keys(table_name)
+                    primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
+
                 # Process column information
                 columns = []
-                primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
                 foreign_keys = []
 
-                # Log FK information for debugging (always at INFO level to help troubleshoot)
-                logger.info(f"FK inspection for {schema_name}.{table_name}: get_foreign_keys() returned {len(table_fks)} constraints")
-                if table_fks:
-                    for fk in table_fks:
-                        logger.info(f"  FK constraint: {fk}")
-                else:
-                    logger.info(f"  No FK constraints returned by SQLAlchemy inspector for {table_name}")
-                    # Snowflake-specific fallback: directly query SHOW IMPORTED KEYS
-                    db_type = self.connection_info.get("type", "")
-                    if db_type == "snowflake" and schema_name:
-                        logger.info(f"  Trying Snowflake-specific FK query for {schema_name}.{table_name}")
-                        try:
-                            # Query FKs directly from Snowflake metadata
-                            fk_query = text(f'SHOW IMPORTED KEYS IN TABLE "{schema_name}"."{table_name}"')
-                            result = conn.execute(fk_query)
-                            rows = result.fetchall()
-                            if rows:
-                                logger.info(f"  SHOW IMPORTED KEYS returned {len(rows)} rows for {table_name}")
-                                # Parse Snowflake FK result columns:
-                                # pk_database_name, pk_schema_name, pk_table_name, pk_column_name,
-                                # fk_database_name, fk_schema_name, fk_table_name, fk_column_name, ...
-                                for row in rows:
-                                    row_dict = row._asdict() if hasattr(row, '_asdict') else dict(row._mapping)
-                                    logger.info(f"    FK row: {row_dict}")
-                                    # Build FK structure matching SQLAlchemy format
-                                    pk_table = row_dict.get('pk_table_name')
-                                    pk_column = row_dict.get('pk_column_name')
-                                    pk_schema = row_dict.get('pk_schema_name')
-                                    fk_column = row_dict.get('fk_column_name')
-                                    if pk_table and fk_column:
-                                        table_fks.append({
-                                            'constrained_columns': [fk_column],
-                                            'referred_schema': pk_schema,
-                                            'referred_table': pk_table,
-                                            'referred_columns': [pk_column],
-                                            'name': row_dict.get('fk_name')
-                                        })
-                                logger.info(f"  After Snowflake fallback: {len(table_fks)} FK constraints")
-                            else:
-                                logger.info(f"  SHOW IMPORTED KEYS returned no rows for {table_name}")
-                        except Exception as e:
-                            logger.warning(f"  Snowflake FK fallback query failed: {e}")
+                # Log FK information for debugging
+                logger.debug(f"FK for {schema_name}.{table_name}: {len(table_fks)} constraints")
                 
                 for col_info in table_columns:
                     column_name = col_info['name']

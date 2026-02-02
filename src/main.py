@@ -821,6 +821,10 @@ async def analyze_schema(
     db_manager = get_session_db_manager(ctx)
     tables = db_manager.get_tables(schema_name)
 
+    # Prefetch PKs and FKs at schema level (Snowflake optimization)
+    if schema_name:
+        db_manager.prefetch_schema_constraints(schema_name)
+
     all_table_info = []
     table_info_objects = []  # Keep original TableInfo objects for R2RML generation
     for table_name in tables:
@@ -1048,6 +1052,10 @@ async def generate_ontology(
             try:
                 tables = db_manager.get_tables(schema_name)
                 logger.info(f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}")
+
+                # Prefetch PKs and FKs at schema level (Snowflake optimization)
+                if schema_name:
+                    db_manager.prefetch_schema_constraints(schema_name)
 
                 for table_name in tables:
                     try:
