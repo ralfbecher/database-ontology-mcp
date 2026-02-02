@@ -980,6 +980,7 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 # Fetch all PKs for the schema at once
                 pk_by_table: Dict[str, List[str]] = {}
+                pk_success = False
                 try:
                     pk_query = text(f'SHOW PRIMARY KEYS IN SCHEMA {full_schema_path}')
                     self._log_sql_query(str(pk_query))
@@ -993,13 +994,17 @@ class DatabaseManager:
                                 pk_by_table[table] = []
                             pk_by_table[table].append(column)
                     logger.info(f"Prefetched PKs for {len(pk_by_table)} tables")
+                    pk_success = True
                 except Exception as e:
                     logger.warning(f"Failed to prefetch PKs: {e}")
 
-                self._store_in_cache(pk_cache_key, pk_by_table)
+                # Only cache if query succeeded
+                if pk_success:
+                    self._store_in_cache(pk_cache_key, pk_by_table)
 
                 # Fetch all FKs for the schema at once
                 fk_by_table: Dict[str, List[Dict]] = {}
+                fk_success = False
                 try:
                     fk_query = text(f'SHOW IMPORTED KEYS IN SCHEMA {full_schema_path}')
                     self._log_sql_query(str(fk_query))
@@ -1024,10 +1029,13 @@ class DatabaseManager:
                                 'name': fk_name
                             })
                     logger.info(f"Prefetched FKs for {len(fk_by_table)} tables")
+                    fk_success = True
                 except Exception as e:
                     logger.warning(f"Failed to prefetch FKs: {e}")
 
-                self._store_in_cache(fk_cache_key, fk_by_table)
+                # Only cache if query succeeded
+                if fk_success:
+                    self._store_in_cache(fk_cache_key, fk_by_table)
 
         except SQLAlchemyError as e:
             logger.error(f"Failed to prefetch schema constraints: {e}")
