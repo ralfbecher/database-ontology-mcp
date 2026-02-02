@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
+from mcp_ui_server import create_ui_resource
+from mcp_ui_server.core import UIResource
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
@@ -2440,8 +2442,9 @@ async def generate_chart(
     width: int = 800,
     height: int = 600,
     sort_by: Optional[str] = None,
-    sort_order: Optional[str] = None
-) -> Image:
+    sort_order: Optional[str] = None,
+    output_format: str = "image"
+) -> Union[Image, List[UIResource]]:
     """Generate interactive charts from SQL query results or data analysis.
 
     ⚠️ IMPORTANT: data_source parameter MUST be valid JSON (array of objects with double quotes)
@@ -2520,6 +2523,10 @@ async def generate_chart(
                     - 'stacked': bars stacked on top of each other (requires color_column)
         width: Chart width in pixels (default: 800)
         height: Chart height in pixels (default: 600)
+        output_format: Output format for the chart:
+                      - 'image' (default): Returns static PNG image (works in all clients)
+                      - 'ui': Returns interactive UIResource with Plotly HTML (requires MCP-UI support)
+                      When 'ui' is selected, chart_library is automatically set to 'plotly'
         sort_by: Column to sort by (optional). If not specified, uses automatic sorting:
                  - Bar/grouped/stacked: sorts by measure (y_column) descending
                  - Line: sorts by dimension (x_column) ascending
@@ -2648,7 +2655,61 @@ async def generate_chart(
             # Not a JSON string, keep as-is (it's a column name)
             pass
 
-    # Call the implementation to get image bytes and chart_id
+    # Handle UI output format - returns interactive Plotly HTML wrapped in UIResource
+    if output_format == "ui":
+        try:
+            import pandas as pd
+            from .chart_utils import create_plotly_chart
+
+            # Convert data to DataFrame
+            df = pd.DataFrame(data_source)
+
+            # Validate required columns
+            if x_column not in df.columns:
+                raise RuntimeError(f"X-axis column '{x_column}' not found. Available: {list(df.columns)}")
+
+            # Generate Plotly figure
+            fig = create_plotly_chart(
+                df, chart_type, x_column, y_column, color_column,
+                title or f"{chart_type.title()} Chart", chart_style, width, height, sort_by, sort_order
+            )
+
+            # Convert to interactive HTML
+            chart_html = fig.to_html(
+                full_html=True,
+                include_plotlyjs='cdn',
+                config={
+                    'displayModeBar': True,
+                    'responsive': True,
+                    'scrollZoom': True
+                }
+            )
+
+            # Generate unique chart ID
+            chart_id = f"chart_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+            # Create UIResource with the interactive chart
+            ui_resource = create_ui_resource({
+                "uri": f"ui://chart/{chart_id}",
+                "content": {
+                    "type": "rawHtml",
+                    "htmlString": chart_html
+                },
+                "encoding": "text"
+            })
+
+            await ctx.info(f"Interactive chart generated: {chart_id}")
+            return [ui_resource]
+
+        except ImportError as e:
+            await ctx.info("Plotly not available for UI output, falling back to image")
+            logger.warning(f"UI output requires plotly: {e}")
+            # Fall through to image generation
+        except Exception as e:
+            logger.error(f"UI chart generation failed: {e}")
+            raise RuntimeError(f"Failed to generate UI chart: {str(e)}")
+
+    # Default: Call the implementation to get image bytes and chart_id
     result = generate_chart_impl(
         data_source, chart_type, x_column, y_column, color_column,
         title, chart_library, chart_style, width, height, sort_by, sort_order

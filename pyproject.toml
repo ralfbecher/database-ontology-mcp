@@ -46,6 +46,7 @@ dependencies = [
     "aiohttp>=3.11.0",
     # SQL parsing for OBQC validation
     "sqlglot>=26.0.0",
+    "mcp-ui-server>=1.0.0",
 ]
 
 [project.urls]
