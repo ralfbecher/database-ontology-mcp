@@ -884,34 +884,35 @@ async def analyze_schema(
 
     if cached_tables:
         # Schema already analyzed - return cache hit response
-        await ctx.info(f"Schema '{effective_schema or 'default'}' already cached with {len(cached_tables)} tables - skipping re-analysis")
-        return {
-            "schema": effective_schema or "default",
-            "table_count": len(cached_tables),
-            "cache_hit": True,
-            "message": f"Schema already analyzed and CACHED ({len(cached_tables)} tables). No need to re-analyze.",
-            "schema_file": session.schema_file,
-            "r2rml_file": session.r2rml_file,
-            "next_steps": {
-                "recommended": "generate_ontology",
-                "reason": "Schema is already cached - proceed directly to ontology generation",
-                "workflow": [
-                    "1. analyze_schema (ALREADY DONE - cached)",
-                    "2. generate_ontology (DO THIS NOW - will use cached schema)",
-                    "3. suggest_semantic_names (for enrichment)",
-                    "4. apply_semantic_names (to finalize)"
-                ]
-            },
-            "cache_hint": (
-                "STOP! Schema is ALREADY CACHED. Do NOT call analyze_schema again. "
-                "Proceed directly to generate_ontology() - it will use the cached schema automatically."
-            ),
-            "analytical_guidance": (
-                "Schema analysis is COMPLETE and CACHED.\n\n"
-                "NEXT STEP: Call generate_ontology() now - NO parameters needed!\n\n"
-                "Do NOT call analyze_schema again - the data is already cached."
-            )
-        }
+        # Check if ontology is also already generated
+        ontology_also_cached = session.ontology_file is not None
+
+        if ontology_also_cached:
+            # Both schema AND ontology are cached - direct to enrichment
+            await ctx.info(f"Schema AND ontology already cached - proceed directly to suggest_semantic_names()")
+            return {
+                "schema": effective_schema or "default",
+                "table_count": len(cached_tables),
+                "cache_hit": True,
+                "ontology_cached": True,
+                "message": "STOP! Both schema AND ontology are already CACHED. For enrichment, call suggest_semantic_names() directly!",
+                "schema_file": session.schema_file,
+                "ontology_file": session.ontology_file,
+                "next_step": "suggest_semantic_names",
+                "instruction": "Call suggest_semantic_names() NOW - do NOT call any other tools first!"
+            }
+        else:
+            # Only schema is cached - direct to generate_ontology
+            await ctx.info(f"Schema cached with {len(cached_tables)} tables - proceed to generate_ontology()")
+            return {
+                "schema": effective_schema or "default",
+                "table_count": len(cached_tables),
+                "cache_hit": True,
+                "message": f"Schema already CACHED ({len(cached_tables)} tables). Call generate_ontology() next.",
+                "schema_file": session.schema_file,
+                "next_step": "generate_ontology",
+                "instruction": "Call generate_ontology() NOW - do NOT call analyze_schema again!"
+            }
 
     db_manager = get_session_db_manager(ctx)
     tables = db_manager.get_tables(schema_name)
@@ -1094,16 +1095,14 @@ async def generate_ontology(
     # Check if ontology is already generated - return early with guidance
     session = get_session_data(ctx)
     if session.ontology_file:
-        await ctx.info(f"Ontology already generated: {session.ontology_file} - skipping regeneration")
+        await ctx.info(f"Ontology CACHED - call suggest_semantic_names() for enrichment")
         return (
-            f"# ONTOLOGY ALREADY GENERATED\n\n"
+            f"# STOP! ONTOLOGY ALREADY CACHED!\n\n"
             f"Ontology file: {session.ontology_file}\n\n"
-            f"The ontology was already generated in this session and is CACHED.\n"
-            f"Do NOT call generate_ontology again!\n\n"
-            f"## NEXT STEPS:\n"
-            f"1. Call suggest_semantic_names() to review names for enrichment\n"
-            f"2. Call apply_semantic_names(suggestions) with your improvements\n\n"
-            f"The cached ontology will be used automatically."
+            f"Do NOT call generate_ontology or analyze_schema again!\n\n"
+            f"## FOR ENRICHMENT:\n"
+            f"Call suggest_semantic_names() NOW - it will use the cached ontology automatically.\n\n"
+            f"That's the ONLY tool you need to call for enrichment!"
         )
 
     # Validate base_uri
@@ -1287,32 +1286,26 @@ async def generate_ontology(
 
 @mcp.tool()
 async def suggest_semantic_names(
-    ctx: Context
+    ctx: Context,
+    ontology_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
-    IMPORTANT: This tool uses the CACHED ontology from generate_ontology().
-    Do NOT call analyze_schema again - just call this tool directly!
+    *** FOR ENRICHMENT: Just call this tool with ontology_file from generate_ontology response! ***
 
-    This tool analyzes the ontology from session context (set by generate_ontology) and returns
-    a structured list of all class, property, and relationship names along with analysis of
-    which ones appear to be abbreviations or cryptic identifiers.
+    Args:
+        ontology_file: The ontology filename from generate_ontology response (e.g., "ontology_TPCDS.ttl").
+                      If provided, loads from this file. If not provided, uses session cache.
 
-    ## PURPOSE
+    ## ENRICHMENT WORKFLOW
 
-    Since MCP Sampling is not available in Claude Desktop, this tool enables a two-step workflow:
-    1. Call this tool to extract names that need improvement
-    2. Review the results and provide suggested business-friendly names
-    3. Call apply_semantic_names with your suggestions
-
-    ## WORKFLOW
-
-    After calling generate_ontology():
+    For ontology enrichment, you only need TWO tools:
     ```
-    1. suggest_semantic_names() → Returns list of names needing review (loads from context)
-    2. LLM analyzes names and generates suggestions
-    3. apply_semantic_names(suggestions) → Updates ontology with better names
+    1. suggest_semantic_names(ontology_file="filename.ttl") → Pass the file from generate_ontology
+    2. apply_semantic_names(suggestions, ontology_file="filename.ttl") → Apply your improvements
     ```
+
+    Do NOT call analyze_schema or generate_ontology again - just pass the ontology_file!
 
     ## NAME ANALYSIS
 
@@ -1355,13 +1348,30 @@ async def suggest_semantic_names(
     ```
     """
     try:
-        # Load ontology from session state
+        # Load ontology - prefer provided file, fall back to session cache
         try:
-            generator, source_filename = load_ontology_from_session(ctx)
+            if ontology_file:
+                # Use provided ontology file
+                output_dir = get_output_dir()
+                ontology_path = output_dir / ontology_file
+                if not ontology_path.exists():
+                    return {
+                        "error": f"Ontology file not found: {ontology_file}",
+                        "error_type": "file_not_found",
+                        "hint": "Check the filename from generate_ontology response"
+                    }
+                generator = OntologyGenerator()
+                generator.load_from_file(str(ontology_path))
+                source_filename = ontology_file
+                logger.info(f"Loaded ontology from provided file: {ontology_file}")
+            else:
+                # Fall back to session cache
+                generator, source_filename = load_ontology_from_session(ctx)
         except ValueError as e:
             return {
                 "error": str(e),
-                "error_type": "session_error"
+                "error_type": "session_error",
+                "hint": "Pass ontology_file parameter from generate_ontology response"
             }
 
         # Extract names for review
@@ -1416,36 +1426,34 @@ async def suggest_semantic_names(
 async def apply_semantic_names(
     ctx: Context,
     suggestions: str,
+    ontology_file: Optional[str] = None,
     save_to_file: bool = True
 ) -> str:
     """Apply LLM-suggested semantic names to an existing ontology.
 
-    This tool takes name suggestions and applies them to the ontology
-    automatically loaded from the session context (set by generate_ontology).
+    Args:
+        suggestions: JSON string containing name suggestions (see format below)
+        ontology_file: The ontology filename from generate_ontology response (e.g., "ontology_TPCDS.ttl").
+                      If provided, loads from this file. If not provided, uses session cache.
+        save_to_file: Whether to save the updated ontology to a file (default: True)
 
-    ## PURPOSE
+    ## ENRICHMENT WORKFLOW
 
-    Completes the semantic name resolution workflow:
-    1. generate_ontology() → Creates ontology, stores in session context
-    2. suggest_semantic_names() → Extracts names for LLM review
-    3. apply_semantic_names(suggestions) → Loads ontology from context, applies suggestions
+    Pass the ontology_file from generate_ontology:
+    ```
+    1. suggest_semantic_names(ontology_file="filename.ttl") → Get names to review
+    2. apply_semantic_names(suggestions, ontology_file="filename.ttl") → Apply improvements
+    ```
+
+    Do NOT call analyze_schema or generate_ontology again!
 
     ## WHAT GETS UPDATED
 
-    For each suggestion, the tool will:
-    - Update rdfs:label to the suggested business-friendly name
-    - Add db:semanticName annotation with the new name
-    - Add db:businessDescription with the provided description
+    For each suggestion:
+    - Update rdfs:label to the business-friendly name
+    - Add db:semanticName annotation
+    - Add rdfs:comment with the description
     - Preserve original db:tableName/db:columnName for SQL generation
-
-    ## IMPORTANT
-
-    The original database identifiers (db:tableName, db:columnName) are preserved
-    so that SQL generation continues to work correctly. The semantic names are
-    used for business understanding and documentation.
-
-    No database connection is required - the ontology is automatically
-    loaded from the session context (set by generate_ontology).
 
     Args:
         suggestions: JSON string containing name suggestions in the format:
@@ -1479,11 +1487,29 @@ async def apply_semantic_names(
     try:
         import json
 
-        # Load ontology from session state
+        # Load ontology - prefer provided file, fall back to session cache
         try:
-            generator, source_filename = load_ontology_from_session(ctx)
+            if ontology_file:
+                # Use provided ontology file
+                output_dir = get_output_dir()
+                ontology_path = output_dir / ontology_file
+                if not ontology_path.exists():
+                    return create_error_response(
+                        f"Ontology file not found: {ontology_file}",
+                        "file_not_found"
+                    )
+                generator = OntologyGenerator()
+                generator.load_from_file(str(ontology_path))
+                source_filename = ontology_file
+                logger.info(f"Loaded ontology from provided file: {ontology_file}")
+            else:
+                # Fall back to session cache
+                generator, source_filename = load_ontology_from_session(ctx)
         except ValueError as e:
-            return create_error_response(str(e), "session_error")
+            return create_error_response(
+                f"{str(e)} - pass ontology_file parameter from generate_ontology response",
+                "session_error"
+            )
 
         # Parse suggestions
         try:
