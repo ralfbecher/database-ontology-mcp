@@ -1157,9 +1157,38 @@ class DatabaseManager:
                         table_fks = inspector.get_foreign_keys(table_name)
                     primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
 
-                # Fallback: if columns not from cache, fetch via inspector
+                # Fallback: if columns not from cache, fetch with table-specific query
                 if table_columns is None:
-                    if schema_name:
+                    db_type = self.connection_info.get("type", "")
+                    if db_type == "snowflake" and schema_name:
+                        # Use efficient table-filtered query for Snowflake
+                        try:
+                            cols_query = text('''
+                                SELECT column_name, data_type, is_nullable, column_default, comment
+                                FROM information_schema.columns
+                                WHERE table_schema = :schema_name AND table_name = :table_name
+                                ORDER BY ordinal_position
+                            ''')
+                            self._log_sql_query(str(cols_query))
+                            result = conn.execute(cols_query, {"schema_name": schema_name, "table_name": table_name})
+                            rows = result.fetchall()
+                            if not rows:
+                                logger.error(f"Table {schema_name}.{table_name} not found")
+                                return None
+                            table_columns = []
+                            for row in rows:
+                                row_dict = row._asdict() if hasattr(row, '_asdict') else dict(row._mapping)
+                                table_columns.append({
+                                    'name': row_dict.get('column_name') or row_dict.get('COLUMN_NAME'),
+                                    'type': row_dict.get('data_type') or row_dict.get('DATA_TYPE'),
+                                    'nullable': (row_dict.get('is_nullable') or row_dict.get('IS_NULLABLE', 'YES')).upper() == 'YES',
+                                    'default': row_dict.get('column_default') or row_dict.get('COLUMN_DEFAULT'),
+                                    'comment': row_dict.get('comment') or row_dict.get('COMMENT'),
+                                })
+                        except Exception as e:
+                            logger.warning(f"Direct column query failed, falling back to inspector: {e}")
+                            table_columns = inspector.get_columns(table_name, schema=schema_name)
+                    elif schema_name:
                         if not inspector.has_table(table_name, schema=schema_name):
                             logger.error(f"Table {schema_name}.{table_name} not found")
                             return None
