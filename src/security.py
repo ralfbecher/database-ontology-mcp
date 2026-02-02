@@ -169,19 +169,23 @@ class SQLInjectionValidator:
     ]
 
     # Safe SQL patterns that are allowed
+    # Optional comment prefix: allows -- comments and /* */ comments at start of query
+    # Note: After _clean_query(), newlines become spaces, so -- comment ends at next SQL keyword
+    # Pattern matches: optional (-- followed by non-SQL text, or /* ... */) followed by whitespace
+    _OPT_COMMENT = r'^(?:--[^;]*?\s+)?'
+
     SAFE_PATTERNS = [
-        # Basic SELECT queries with JOINs
-        (r'^SELECT\s+.+FROM\s+.+$'),  # More permissive - allows JOINs, WHERE, ORDER BY, LIMIT
+        # Basic SELECT queries with JOINs (with optional leading comments)
+        _OPT_COMMENT + r'SELECT\s+.+\s+FROM\s+.+$',
         # CTEs (WITH clauses) - now more permissive for complex queries
-        r'^WITH\s+[\s\S]+\s+SELECT\s+[\s\S]+$',  # Allow any CTE with SELECT
+        _OPT_COMMENT + r'WITH\s+.+\s+SELECT\s+.+$',
         # Metadata queries
-        r'^DESCRIBE\s+[\w\."]+$',
-        r'^DESC\s+[\w\."]+$',
-        (r'^SHOW\s+(?:TABLES|COLUMNS|DATABASES|SCHEMAS)'
-         r'(?:\s+FROM\s+[\w\."]+)?$'),
-        r'^EXPLAIN\s+.*$',
+        _OPT_COMMENT + r'DESCRIBE\s+[\w\."]+$',
+        _OPT_COMMENT + r'DESC\s+[\w\."]+$',
+        _OPT_COMMENT + r'SHOW\s+(?:TABLES|COLUMNS|DATABASES|SCHEMAS)(?:\s+FROM\s+[\w\."]+)?$',
+        _OPT_COMMENT + r'EXPLAIN\s+.+$',
         # UNION queries (both UNION and UNION ALL) - Note: Will still be blocked if dangerous patterns match
-        r'.*\s+UNION\s+(?:ALL\s+)?SELECT\s+.+',
+        r'.+\s+UNION\s+(?:ALL\s+)?SELECT\s+.+',
     ]
 
     def __init__(self) -> None:
