@@ -741,6 +741,58 @@ async def list_schemas(ctx: Context) -> List[str]:
 
 
 @mcp.tool()
+async def reset_cache(
+    ctx: Context,
+    cache_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """Reset cached schema and/or ontology data to force re-analysis.
+
+    Use this tool when you need to:
+    - Re-analyze schema after database changes
+    - Regenerate ontology with different parameters
+    - Start fresh with a new analysis workflow
+
+    Args:
+        cache_type: Type of cache to reset. Options:
+            - "schema": Clear only schema cache (forces re-analysis)
+            - "ontology": Clear only ontology cache (forces regeneration)
+            - "all" or None: Clear all caches (default)
+
+    Returns:
+        Dictionary with status and cleared cache types
+    """
+    session = get_session_data(ctx)
+    cleared = []
+
+    cache_type_lower = (cache_type or "all").lower()
+
+    if cache_type_lower in ("schema", "all"):
+        session.clear_schema_cache()
+        session.schema_file = None
+        session.r2rml_file = None
+        session._last_analyzed_schema = None
+        cleared.append("schema")
+
+    if cache_type_lower in ("ontology", "all"):
+        session.ontology_file = None
+        session.loaded_ontology = None
+        session.obqc_validator = None
+        cleared.append("ontology")
+
+    await ctx.info(f"Cache cleared: {', '.join(cleared)}")
+
+    return {
+        "status": "success",
+        "cleared_caches": cleared,
+        "message": f"Cleared {', '.join(cleared)} cache(s). You can now re-run analyze_schema and/or generate_ontology.",
+        "next_steps": {
+            "schema": "Call analyze_schema() to re-analyze database schema",
+            "ontology": "Call generate_ontology() to regenerate ontology"
+        }
+    }
+
+
+@mcp.tool()
 async def analyze_schema(
     ctx: Context,
     schema_name: Optional[str] = None
