@@ -929,7 +929,7 @@ class OntologyGenerator:
             return XSD.float, None
         if any(t in sql_type_lower for t in ["double", "double precision"]):
             return XSD.double, None
-        if any(t in sql_type_lower for t in ["decimal", "numeric", "money"]):
+        if any(t in sql_type_lower for t in ["decimal", "numeric", "number", "money"]):
             return XSD.decimal, None
 
         # Boolean types
