@@ -1037,8 +1037,45 @@ class DatabaseManager:
                 if fk_success:
                     self._store_in_cache(fk_cache_key, fk_by_table)
 
+                # Fetch all columns for the schema at once
+                cols_cache_key = self._get_cache_key("schema_cols", schema_name)
+                cols_by_table: Dict[str, List[Dict]] = {}
+                cols_success = False
+                try:
+                    cols_query = text(f'''
+                        SELECT table_name, column_name, data_type,
+                               character_maximum_length, numeric_precision, numeric_scale,
+                               is_nullable, column_default, is_identity, comment
+                        FROM information_schema.columns
+                        WHERE table_schema = :schema_name
+                        ORDER BY table_name, ordinal_position
+                    ''')
+                    self._log_sql_query(str(cols_query))
+                    result = conn.execute(cols_query, {"schema_name": schema_name})
+                    for row in result.fetchall():
+                        row_dict = row._asdict() if hasattr(row, '_asdict') else dict(row._mapping)
+                        table = row_dict.get('table_name') or row_dict.get('TABLE_NAME')
+                        if table:
+                            if table not in cols_by_table:
+                                cols_by_table[table] = []
+                            cols_by_table[table].append({
+                                'name': row_dict.get('column_name') or row_dict.get('COLUMN_NAME'),
+                                'type': row_dict.get('data_type') or row_dict.get('DATA_TYPE'),
+                                'nullable': (row_dict.get('is_nullable') or row_dict.get('IS_NULLABLE', 'YES')).upper() == 'YES',
+                                'default': row_dict.get('column_default') or row_dict.get('COLUMN_DEFAULT'),
+                                'comment': row_dict.get('comment') or row_dict.get('COMMENT'),
+                            })
+                    logger.info(f"Prefetched columns for {len(cols_by_table)} tables")
+                    cols_success = True
+                except Exception as e:
+                    logger.warning(f"Failed to prefetch columns: {e}")
+
+                # Only cache if query succeeded
+                if cols_success:
+                    self._store_in_cache(cols_cache_key, cols_by_table)
+
         except SQLAlchemyError as e:
-            logger.error(f"Failed to prefetch schema constraints: {e}")
+            logger.error(f"Failed to prefetch schema metadata: {e}")
 
     def analyze_table(self, table_name: str, schema_name: Optional[str] = None) -> Optional[TableInfo]:
         """Analyze a specific table and return detailed information."""
@@ -1063,32 +1100,33 @@ class DatabaseManager:
                 inspector = inspect(self.engine)
                 db_type = self.connection_info.get("type", "")
 
-                # Get table metadata using inspector
-                if schema_name:
-                    if not inspector.has_table(table_name, schema=schema_name):
-                        logger.error(f"Table {schema_name}.{table_name} not found")
-                        return None
-                    table_columns = inspector.get_columns(table_name, schema=schema_name)
-                else:
-                    if not inspector.has_table(table_name):
-                        logger.error(f"Table {table_name} not found")
-                        return None
-                    table_columns = inspector.get_columns(table_name)
-
-                # Get PKs and FKs - use cache for Snowflake to avoid repeated schema queries
+                # Get columns, PKs, FKs - use cache for Snowflake to avoid repeated queries
+                table_columns = None
                 primary_keys = []
                 table_fks = []
 
                 if db_type == "snowflake" and schema_name:
                     # Try to get from prefetched cache first
+                    cols_cache_key = self._get_cache_key("schema_cols", schema_name)
                     pk_cache_key = self._get_cache_key("schema_pks", schema_name)
                     fk_cache_key = self._get_cache_key("schema_fks", schema_name)
 
+                    cached_cols = self._get_from_cache(cols_cache_key)
                     cached_pks = self._get_from_cache(pk_cache_key)
                     cached_fks = self._get_from_cache(fk_cache_key)
 
+                    # Use cached columns if available
+                    if cached_cols is not None:
+                        # Case-insensitive table lookup
+                        table_columns = cached_cols.get(table_name) or cached_cols.get(table_name.upper())
+                        if table_columns:
+                            logger.debug(f"Using cached columns for {table_name}: {len(table_columns)} columns")
+                        else:
+                            logger.error(f"Table {schema_name}.{table_name} not found in cache")
+                            return None
+
                     if cached_pks is not None:
-                        primary_keys = cached_pks.get(table_name, [])
+                        primary_keys = cached_pks.get(table_name, []) or cached_pks.get(table_name.upper(), [])
                         logger.debug(f"Using cached PKs for {table_name}: {primary_keys}")
                     else:
                         # Fallback to inspector (will trigger SHOW query)
@@ -1096,7 +1134,7 @@ class DatabaseManager:
                         primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
 
                     if cached_fks is not None:
-                        table_fks = cached_fks.get(table_name, [])
+                        table_fks = cached_fks.get(table_name, []) or cached_fks.get(table_name.upper(), [])
                         logger.debug(f"Using cached FKs for {table_name}: {len(table_fks)} constraints")
                     else:
                         # Fallback to inspector (will trigger SHOW query)
@@ -1104,12 +1142,33 @@ class DatabaseManager:
                 else:
                     # Non-Snowflake: use inspector directly
                     if schema_name:
+                        if not inspector.has_table(table_name, schema=schema_name):
+                            logger.error(f"Table {schema_name}.{table_name} not found")
+                            return None
+                        table_columns = inspector.get_columns(table_name, schema=schema_name)
                         table_pk = inspector.get_pk_constraint(table_name, schema=schema_name)
                         table_fks = inspector.get_foreign_keys(table_name, schema=schema_name)
                     else:
+                        if not inspector.has_table(table_name):
+                            logger.error(f"Table {table_name} not found")
+                            return None
+                        table_columns = inspector.get_columns(table_name)
                         table_pk = inspector.get_pk_constraint(table_name)
                         table_fks = inspector.get_foreign_keys(table_name)
                     primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
+
+                # Fallback: if columns not from cache, fetch via inspector
+                if table_columns is None:
+                    if schema_name:
+                        if not inspector.has_table(table_name, schema=schema_name):
+                            logger.error(f"Table {schema_name}.{table_name} not found")
+                            return None
+                        table_columns = inspector.get_columns(table_name, schema=schema_name)
+                    else:
+                        if not inspector.has_table(table_name):
+                            logger.error(f"Table {table_name} not found")
+                            return None
+                        table_columns = inspector.get_columns(table_name)
 
                 # Process column information
                 columns = []
