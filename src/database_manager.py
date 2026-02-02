@@ -992,13 +992,48 @@ class DatabaseManager:
                 primary_keys = table_pk.get('constrained_columns', []) if table_pk else []
                 foreign_keys = []
 
-                # Log FK information for debugging
+                # Log FK information for debugging (always at INFO level to help troubleshoot)
+                logger.info(f"FK inspection for {schema_name}.{table_name}: get_foreign_keys() returned {len(table_fks)} constraints")
                 if table_fks:
-                    logger.info(f"Found {len(table_fks)} foreign key constraints for table {table_name}")
                     for fk in table_fks:
-                        logger.info(f"  FK: {fk}")
+                        logger.info(f"  FK constraint: {fk}")
                 else:
-                    logger.debug(f"No foreign keys found for table {table_name}")
+                    logger.info(f"  No FK constraints returned by SQLAlchemy inspector for {table_name}")
+                    # Snowflake-specific fallback: directly query SHOW IMPORTED KEYS
+                    db_type = self.connection_info.get("type", "")
+                    if db_type == "snowflake" and schema_name:
+                        logger.info(f"  Trying Snowflake-specific FK query for {schema_name}.{table_name}")
+                        try:
+                            # Query FKs directly from Snowflake metadata
+                            fk_query = text(f'SHOW IMPORTED KEYS IN TABLE "{schema_name}"."{table_name}"')
+                            result = conn.execute(fk_query)
+                            rows = result.fetchall()
+                            if rows:
+                                logger.info(f"  SHOW IMPORTED KEYS returned {len(rows)} rows for {table_name}")
+                                # Parse Snowflake FK result columns:
+                                # pk_database_name, pk_schema_name, pk_table_name, pk_column_name,
+                                # fk_database_name, fk_schema_name, fk_table_name, fk_column_name, ...
+                                for row in rows:
+                                    row_dict = row._asdict() if hasattr(row, '_asdict') else dict(row._mapping)
+                                    logger.info(f"    FK row: {row_dict}")
+                                    # Build FK structure matching SQLAlchemy format
+                                    pk_table = row_dict.get('pk_table_name')
+                                    pk_column = row_dict.get('pk_column_name')
+                                    pk_schema = row_dict.get('pk_schema_name')
+                                    fk_column = row_dict.get('fk_column_name')
+                                    if pk_table and fk_column:
+                                        table_fks.append({
+                                            'constrained_columns': [fk_column],
+                                            'referred_schema': pk_schema,
+                                            'referred_table': pk_table,
+                                            'referred_columns': [pk_column],
+                                            'name': row_dict.get('fk_name')
+                                        })
+                                logger.info(f"  After Snowflake fallback: {len(table_fks)} FK constraints")
+                            else:
+                                logger.info(f"  SHOW IMPORTED KEYS returned no rows for {table_name}")
+                        except Exception as e:
+                            logger.warning(f"  Snowflake FK fallback query failed: {e}")
                 
                 for col_info in table_columns:
                     column_name = col_info['name']
@@ -1039,71 +1074,10 @@ class DatabaseManager:
                     )
                     columns.append(column_info)
                 
-                # Get row count and sample data
+                # Row count and sample data are not fetched during schema analysis
+                # Use sample_table_data tool to get sample data for specific tables
                 row_count = None
                 sample_data = None
-                
-                try:
-                    # Validate identifiers once
-                    if not self._validate_identifier(table_name) or (schema_name and not self._validate_identifier(schema_name)):
-                        logger.warning(f"Invalid identifier format: {schema_name}.{table_name}")
-                    else:
-                        # Construct table name once
-                        if schema_name:
-                            full_table_name = f'"{schema_name}"."{table_name}"'
-                        else:
-                            full_table_name = f'"{table_name}"'
-                        
-                        # Get row count
-                        count_query_str = f'SELECT COUNT(*) FROM {full_table_name}'
-                        self._log_sql_query(count_query_str)
-                        count_query = text(count_query_str)
-                        result = conn.execute(count_query)
-                        row_count = result.scalar()
-                        
-                        # Get 10 random sample rows
-                        if row_count and row_count > 0:
-                            db_type = self.connection_info.get("type")
-                            if db_type == "snowflake":
-                                # Snowflake uses SAMPLE for random sampling
-                                sample_query_str = f'SELECT * FROM {full_table_name} SAMPLE (10 ROWS) LIMIT 10'
-                            elif db_type == "dremio":
-                                # Dremio doesn't support TABLESAMPLE or RANDOM(), use simple LIMIT
-                                sample_query_str = f'SELECT * FROM {full_table_name} LIMIT 10'
-                            else:
-                                # PostgreSQL uses ORDER BY RANDOM() for random sampling
-                                sample_query_str = f'SELECT * FROM {full_table_name} ORDER BY RANDOM() LIMIT 10'
-                            
-                            self._log_sql_query(sample_query_str)
-                            sample_query = text(sample_query_str)
-                            sample_result = conn.execute(sample_query)
-                            sample_columns = list(sample_result.keys())
-                            
-                            sample_rows = []
-                            for row in sample_result.fetchall():
-                                row_dict = {}
-                                for i, value in enumerate(row):
-                                    column_name = sample_columns[i]
-                                    if value is not None:
-                                        if isinstance(value, decimal.Decimal):  # decimal/numeric types
-                                            row_dict[column_name] = float(value)
-                                        elif hasattr(value, 'isoformat'):  # datetime objects
-                                            row_dict[column_name] = value.isoformat()
-                                        elif isinstance(value, (bytes, bytearray)):
-                                            row_dict[column_name] = value.hex()
-                                        elif hasattr(value, '__dict__'):  # Complex objects
-                                            row_dict[column_name] = str(value)
-                                        else:
-                                            row_dict[column_name] = value
-                                    else:
-                                        row_dict[column_name] = None
-                                sample_rows.append(row_dict)
-                            
-                            sample_data = sample_rows
-                        
-                except SQLAlchemyError as e:
-                    logger.warning(f"Could not get row count or sample data for {table_name}: {e}")
-                    # Continue without row count and sample data
                 
                 return TableInfo(
                     name=table_name,

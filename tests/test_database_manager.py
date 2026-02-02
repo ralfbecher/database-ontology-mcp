@@ -151,29 +151,14 @@ class TestDatabaseManager(unittest.TestCase):
         }
         mock_inspector.get_foreign_keys.return_value = []
 
-        # Mock connection for row count and sample data
+        # Mock connection (no longer used for row count/sample queries)
         mock_conn = Mock()
-
-        # Mock the row count query result - scalar() must return actual int, not Mock
-        mock_count_result = Mock()
-        mock_count_result.scalar.return_value = 100
-
-        # Mock the sample data query result
-        mock_sample_result = Mock()
-        mock_sample_result.keys.return_value = ['id', 'name']
-        mock_sample_result.fetchall.return_value = [
-            (1, 'Test User 1'),
-            (2, 'Test User 2')
-        ]
-
-        # Mock execute to return different results for different queries
-        mock_conn.execute.side_effect = [mock_count_result, mock_sample_result]
-        mock_conn.close = Mock()  # Add close method for cleanup
+        mock_conn.close = Mock()
 
         # get_connection() calls engine.connect() directly, not as context manager
         self.db_manager.engine.connect.return_value = mock_conn
 
-        # Set connection_info to determine database type for sample query
+        # Set connection_info to determine database type
         self.db_manager.connection_info = {"type": "postgresql"}
 
         # Mock _test_connection to return True so _ensure_connection doesn't fail
@@ -185,7 +170,8 @@ class TestDatabaseManager(unittest.TestCase):
         self.assertEqual(result.schema, "public")
         self.assertEqual(len(result.columns), 2)
         self.assertEqual(result.primary_keys, ['id'])
-        self.assertEqual(result.row_count, 100)
+        # row_count is no longer fetched during analyze_table (use sample_table_data tool instead)
+        self.assertIsNone(result.row_count)
     
     def test_analyze_table_no_engine(self):
         """Test table analysis without engine."""
