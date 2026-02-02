@@ -967,14 +967,21 @@ class DatabaseManager:
             logger.debug(f"Schema constraints already cached for {schema_name}")
             return
 
-        logger.info(f"Prefetching PKs and FKs for schema {schema_name}")
+        # Get database name for full path (required by Snowflake)
+        database_name = self.connection_info.get("database", "")
+        if database_name:
+            full_schema_path = f'"{database_name}"."{schema_name}"'
+        else:
+            full_schema_path = f'"{schema_name}"'
+
+        logger.info(f"Prefetching PKs and FKs for schema {full_schema_path}")
 
         try:
             with self.get_connection() as conn:
                 # Fetch all PKs for the schema at once
                 pk_by_table: Dict[str, List[str]] = {}
                 try:
-                    pk_query = text(f'SHOW PRIMARY KEYS IN SCHEMA "{schema_name}"')
+                    pk_query = text(f'SHOW PRIMARY KEYS IN SCHEMA {full_schema_path}')
                     self._log_sql_query(str(pk_query))
                     result = conn.execute(pk_query)
                     for row in result.fetchall():
@@ -994,7 +1001,7 @@ class DatabaseManager:
                 # Fetch all FKs for the schema at once
                 fk_by_table: Dict[str, List[Dict]] = {}
                 try:
-                    fk_query = text(f'SHOW IMPORTED KEYS IN SCHEMA "{schema_name}"')
+                    fk_query = text(f'SHOW IMPORTED KEYS IN SCHEMA {full_schema_path}')
                     self._log_sql_query(str(fk_query))
                     result = conn.execute(fk_query)
                     for row in result.fetchall():
