@@ -127,6 +127,6 @@ When implementing changes, ALWAYS:
 
 ## Dependencies
 
-Core: `fastmcp>=2.13.2`, `sqlalchemy>=2.0.36`, `rdflib>=7.1.0`, `pydantic>=2.10.0`
+Core: `fastmcp>=2.14.4`, `sqlalchemy>=2.0.36`, `rdflib>=7.1.0`, `pydantic>=2.10.0`
 
 Visualization: `plotly>=5.24.0`, `matplotlib>=3.9.0`, `pandas>=2.2.0`
