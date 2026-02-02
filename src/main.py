@@ -714,13 +714,8 @@ async def connect_database(ctx: Context, db_type: str) -> str:
         # Clear any cached schema from previous connection
         session = get_session_data(ctx)
         session.clear_schema_cache()
-        await ctx.info(f"Database connected; next call: generate_ontology(schema_name='YOUR_SCHEMA')")
-        return (
-            f"Successfully connected to {db_type} database: {db_name}\n\n"
-            f"NEXT STEP: Call generate_ontology(schema_name='YOUR_SCHEMA')\n"
-            f"This will auto-analyze the schema AND generate the ontology in one step!\n"
-            f"You do NOT need to call analyze_schema separately."
-        )
+        await ctx.info(f"Connected to {db_type}: {db_name}")
+        return f"Successfully connected to {db_type} database: {db_name}"
     else:
         await ctx.info(f"Database connection failed; check credentials and try again")
         return create_error_response(
