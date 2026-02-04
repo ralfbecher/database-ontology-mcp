@@ -2789,36 +2789,6 @@ async def generate_chart(
 
 
 @mcp.tool()
-async def test_ui_resource(ctx: Context) -> List[UIResource]:
-    """Test MCP-UI rendering with a simple HTML card.
-
-    Use this tool to verify that UIResource rendering works in your client.
-    If you see an interactive card, MCP-UI is working correctly.
-
-    Returns:
-        A UIResource with HTML content
-    """
-    html_content = """<div style="font-family: system-ui, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 24px; border-radius: 12px; max-width: 400px;">
-    <h2 style="margin: 0 0 12px 0;">MCP-UI Test</h2>
-    <p style="margin: 0; opacity: 0.9;">This interactive UI is rendered from an MCP tool result.</p>
-    <span style="background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 16px; display: inline-block;">Orionbelt Semantic Layer</span>
-</div>"""
-
-    await ctx.info("Test UI resource created")
-
-    # Use mcp_ui_server with resource:// URI scheme
-    ui_resource = create_ui_resource({
-        "uri": "ui://orionbelt/test-card",
-        "content": {
-            "type": "rawHtml",
-            "htmlString": html_content
-        },
-        "encoding": "text"
-    })
-    return [ui_resource]
-
-
-@mcp.tool()
 async def get_server_info(ctx: Context) -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
 

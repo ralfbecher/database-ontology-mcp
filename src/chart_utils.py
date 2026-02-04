@@ -85,6 +85,31 @@ def get_quarter_sort_order(values, ascending=True):
     return [x[2] for x in parsed]
 
 
+def _clean_dataframe_for_plotly(df):
+    """Create a clean DataFrame copy safe for Plotly operations.
+
+    The "cannot insert X, already exists" error occurs when a pandas DataFrame
+    has an index.name that matches an existing column name. When reset_index()
+    is called (either explicitly or internally by pandas/Plotly), pandas tries
+    to insert the index as a new column with that name, causing the conflict.
+
+    This function creates a completely fresh DataFrame from the data records,
+    which eliminates any index metadata that could cause conflicts.
+
+    Args:
+        df: Input DataFrame (may have problematic index.name)
+
+    Returns:
+        Clean DataFrame with default RangeIndex and no index.name
+    """
+    import pandas as pd
+
+    # Create a fresh DataFrame from records - this completely removes any
+    # index metadata (name, type, etc.) that could conflict with columns
+    clean_df = pd.DataFrame(df.to_dict('records'))
+    return clean_df
+
+
 def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width=800, height=600, sort_by=None, sort_order=None):
     """Create Plotly chart based on type.
 
@@ -99,6 +124,10 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
+
+    # Create a completely clean DataFrame to avoid pandas index/column conflicts
+    # (fixes "cannot insert X, already exists" errors when df.index.name matches a column)
+    df = _clean_dataframe_for_plotly(df)
 
     if chart_type == "bar":
         # Check if x_column contains chronological data (quarters, months, or dates)
@@ -141,6 +170,7 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             # Stacked bar chart with two dimensions: x_column (categories) and color_column (stack groups)
             # Aggregate data first to handle duplicates
             agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
+            agg_df = _clean_dataframe_for_plotly(agg_df)  # Clean for pandas index conflicts
             # Check for quarterly data first
             quarter_order = get_quarter_sort_order(agg_df[x_column].unique(), ascending=sort_ascending)
             if quarter_order:
@@ -159,6 +189,7 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
         elif color_column:
             # Grouped bar chart - aggregate data first to handle duplicates
             agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
+            agg_df = _clean_dataframe_for_plotly(agg_df)  # Clean for pandas index conflicts
             # Check for quarterly data first
             quarter_order = get_quarter_sort_order(agg_df[x_column].unique(), ascending=sort_ascending)
             if quarter_order:
@@ -179,6 +210,7 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
         else:
             # Simple bar chart - aggregate first, then sort by measure (default) or specified column
             agg_df = df.groupby(x_column, as_index=False)[y_column].sum()
+            agg_df = _clean_dataframe_for_plotly(agg_df)  # Clean for pandas index conflicts
             # Check for quarterly data first
             quarter_order = get_quarter_sort_order(agg_df[x_column].unique(), ascending=sort_ascending)
             if quarter_order:
@@ -192,8 +224,9 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
                         labels={x_column: format_measure_name(x_column),
                                 y_column: format_measure_name(y_column)})
     elif chart_type == "line":
-        # Work with a copy to avoid modifying the original dataframe
-        sorted_df = df.copy()
+        # Work with a clean copy to avoid modifying the original dataframe
+        # and prevent Plotly 6.x index/column conflicts
+        sorted_df = _clean_dataframe_for_plotly(df)
 
         # Determine sorting for line charts
         # Default: sort by dimension (x_column) ascending
@@ -227,19 +260,22 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             def parse_quarter(q_str):
                 match = re.match(r'^Q([1-4])\s*(\d{4})$', str(q_str).strip(), re.IGNORECASE)
                 if match:
-                    quarter = int(match.group(1))
+                    qtr = int(match.group(1))
                     year = int(match.group(2))
-                    return (year, quarter)
+                    return (year, qtr)
                 return (0, 0)  # Fallback for invalid formats
 
-            # Add a temporary column for sorting
-            sorted_df['_quarter_order'] = sorted_df[x_column].apply(parse_quarter)
+            # Add a temporary column for sorting (use unique name to avoid conflicts)
+            temp_col = '_qtr_sort_order'
+            if temp_col in sorted_df.columns:
+                sorted_df = sorted_df.drop(columns=[temp_col])
+            sorted_df[temp_col] = sorted_df[x_column].apply(parse_quarter)
 
             # Sort by the temporary column
-            sorted_df = sorted_df.sort_values(by='_quarter_order', ascending=sort_ascending)
+            sorted_df = sorted_df.sort_values(by=temp_col, ascending=sort_ascending)
 
             # Remove the temporary column
-            sorted_df = sorted_df.drop(columns=['_quarter_order'])
+            sorted_df = sorted_df.drop(columns=[temp_col])
         elif is_month_column and effective_sort_by == x_column:
             # Create a mapping for month sorting
             month_order = {month: i for i, month in enumerate(month_names_full)}
