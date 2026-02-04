@@ -49,7 +49,7 @@ bandit -r src/
 - **`src/ontology_generator.py`** (~900 lines) - RDF/OWL generation using rdflib with `db:` namespace annotations
 - **`src/r2rml_generator.py`** (~360 lines) - W3C R2RML mapping generation
 - **`src/security.py`** (~350 lines) - SQL injection prevention, fan-trap detection, credential encryption
-- **`src/chart_utils.py`** (~700 lines) - Plotly/Matplotlib chart generation
+- **`src/chart_utils.py`** (~450 lines) - Plotly chart generation (kaleido for PNG export)
 
 ### Key Patterns
 
@@ -125,8 +125,17 @@ When implementing changes, ALWAYS:
 
 **Avoid incremental fixes** - solve problems completely the first time by understanding the full scope before writing code.
 
+## Working Style
+
+- **Verify before done**: Run tests and check logs to prove changes work before marking complete
+- **Fix bugs directly**: When given a bug report, investigate and fix it - don't ask for hand-holding
+- **Re-plan when stuck**: If implementation hits unexpected complexity, stop and re-plan rather than pushing through with hacky fixes
+- **Challenge your work**: Before presenting a solution, ask "would a staff engineer approve this?"
+
 ## Dependencies
 
 Core: `fastmcp>=2.14.4`, `sqlalchemy>=2.0.36`, `rdflib>=7.1.0`, `pydantic>=2.10.0`
 
-Visualization: `plotly>=5.24.0`, `matplotlib>=3.9.0`, `pandas>=2.2.0`
+Visualization: `plotly>=6.1.1`, `kaleido>=1.2.0`, `pandas>=2.2.0`
+
+MCP-UI: `mcp-ui-server>=1.0.0` (for interactive chart rendering in Claude Desktop)

@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
 
-from ..chart_utils import create_plotly_chart, create_matplotlib_chart, save_image_to_tmp
+from ..chart_utils import create_plotly_chart, save_image_to_tmp
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +16,14 @@ def generate_chart(
     y_column: Optional[Union[str, List[str]]] = None,
     color_column: Optional[str] = None,
     title: Optional[str] = None,
-    chart_library: str = "matplotlib",
     chart_style: str = "grouped",
     width: int = 800,
     height: int = 600,
     sort_by: Optional[str] = None,
-    sort_order: Optional[str] = None
-) -> Union[Tuple[bytes, str], Dict[str, str]]:
-    """Generate chart and return image bytes and chart_id for MCP resources.
+    sort_order: Optional[str] = None,
+    output_format: str = "image"
+) -> Union[Tuple[bytes, str], Dict[str, Any]]:
+    """Generate chart and return either Plotly data or image bytes.
 
     Args:
         data_source: List of dictionaries containing the data
@@ -34,7 +34,6 @@ def generate_chart(
             - List of strings: multiple measures (line charts only - creates multi-line comparison)
         color_column: Column for color grouping (for stacked/grouped bar charts)
         title: Chart title
-        chart_library: "matplotlib" or "plotly"
         chart_style: "grouped" or "stacked" (for bar charts)
         width: Chart width in pixels
         height: Chart height in pixels
@@ -43,9 +42,12 @@ def generate_chart(
             - Line: sorts by dimension (x_column) ascending
             - Heatmap: sorts x_column ascending, y_column descending
         sort_order: 'ascending' or 'descending'. If None, uses automatic order based on chart type.
+        output_format: "interactive" returns Plotly JSON data for MCP Apps rendering.
+                      "image" returns PNG bytes for static display (requires kaleido).
 
     Returns:
-        Tuple of (image_bytes, chart_id) on success
+        For output_format="interactive": Dict with 'traces', 'layout', 'config' for Plotly
+        For output_format="image": Tuple of (image_bytes, chart_id)
         Dict with 'error' key on failure
     """
     try:
@@ -57,23 +59,11 @@ def generate_chart(
         except ImportError:
             missing_libs.append("pandas")
 
-        if chart_library == "plotly":
-            try:
-                import plotly.express as px
-                import plotly.graph_objects as go
-                from plotly.io import to_html, to_image
-            except ImportError:
-                missing_libs.append("plotly")
-        else:
-            try:
-                import matplotlib.pyplot as plt
-                import seaborn as sns
-                plt.style.use('default')
-            except ImportError as e:
-                if "matplotlib" in str(e):
-                    missing_libs.append("matplotlib")
-                if "seaborn" in str(e):
-                    missing_libs.append("seaborn")
+        try:
+            import plotly.express as px
+            import plotly.graph_objects as go
+        except ImportError:
+            missing_libs.append("plotly")
 
         if missing_libs:
             return {"error": f"❌ Missing required visualization libraries: {', '.join(missing_libs)}. Install with: pip install {' '.join(missing_libs)}"}
@@ -175,49 +165,59 @@ def generate_chart(
         safe_title = "".join(c for c in title.replace(" ", "_") if c.isalnum() or c in "_-")
         chart_id = f"{chart_type}_{safe_title}_{timestamp}"
 
-        # Generate chart and create PNG image
-        image_bytes = None
-
-        if chart_library == "plotly":
+        # Handle interactive output format (return Plotly JSON data)
+        if output_format == "interactive":
             try:
                 fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
-                # Try to export as PNG
-                try:
-                    image_bytes = fig.to_image(format='png', width=width, height=height, scale=2)
-                except Exception as e:
-                    if "kaleido" in str(e).lower():
-                        # Fallback to matplotlib if kaleido not available
-                        chart_library = "matplotlib"
-                    else:
-                        raise e
-            except ImportError:
-                # Plotly not available, fall back to matplotlib
-                chart_library = "matplotlib"
 
-        if chart_library == "matplotlib":
-            fig = create_matplotlib_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
-            # Generate PNG bytes with optimized settings
-            import io
-            img_buffer = io.BytesIO()
-            fig.savefig(img_buffer, format='png', bbox_inches='tight',
-                       facecolor='white', edgecolor='none', transparent=False,
-                       dpi=150, pad_inches=0.1)
-            image_bytes = img_buffer.getvalue()
-            img_buffer.close()
+                # Convert figure to JSON-serializable dict
+                fig_dict = fig.to_dict()
 
-            # Close figure to free memory
-            import matplotlib.pyplot as plt
-            plt.close(fig)
+                # Return Plotly data for MCP Apps rendering
+                result = {
+                    "traces": fig_dict.get("data", []),
+                    "layout": fig_dict.get("layout", {}),
+                    "config": {
+                        "displayModeBar": True,
+                        "responsive": True,
+                        "scrollZoom": True,
+                        "displaylogo": False,
+                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                        "toImageButtonOptions": {
+                            "format": "png",
+                            "filename": chart_id,
+                            "scale": 2
+                        }
+                    },
+                    "metadata": {
+                        "chart_id": chart_id,
+                        "chart_type": chart_type,
+                        "data_points": len(df),
+                        "library": "plotly"
+                    }
+                }
 
-        # Log chart creation success
-        logger.info(f"Created {chart_type} chart with {len(df)} data points using {chart_library}")
+                logger.info(f"Created interactive {chart_type} chart with {len(df)} data points")
+                return result
 
-        if image_bytes:
-            # Also save to tmp directory for backward compatibility
-            save_image_to_tmp(image_bytes, chart_id, 'png')
-            return (image_bytes, chart_id)
-        else:
-            return {"error": "❌ Failed to generate chart image"}
+            except ImportError as e:
+                logger.warning(f"Plotly not available for interactive mode: {e}")
+                return {"error": "❌ Plotly required for interactive charts. Install with: pip install plotly"}
+
+        # Handle image output format (return PNG bytes using Plotly + kaleido)
+        try:
+            fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
+            image_bytes = fig.to_image(format='png', width=width, height=height, scale=2)
+        except Exception as e:
+            if "kaleido" in str(e).lower():
+                return {"error": "❌ kaleido required for PNG export. Install with: pip install kaleido"}
+            raise
+
+        logger.info(f"Created {chart_type} chart image with {len(df)} data points")
+
+        # Also save to tmp directory for backward compatibility
+        save_image_to_tmp(image_bytes, chart_id, 'png')
+        return (image_bytes, chart_id)
 
     except Exception as e:
         logger.error(f"Chart creation error: {e}")

@@ -245,7 +245,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-**Note**: The charting functionality requires visualization libraries (pandas, plotly, matplotlib, seaborn). These are automatically installed via `uv sync` or `pip install -e .`
+**Note**: The charting functionality requires visualization libraries (pandas, plotly, kaleido). These are automatically installed via `uv sync` or `pip install -e .`
 
 3. **Configure environment:**
 
@@ -684,7 +684,7 @@ GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 
 #### 11. `generate_chart`
 
-Generate interactive charts from SQL query results with support for stacked bar charts and multi-measure line charts.
+Generate interactive charts from SQL query results with support for stacked bar charts and multi-measure line charts. Uses Plotly for visualization with MCP-UI support for interactive rendering in Claude Desktop.
 
 **Parameters:**
 
@@ -702,27 +702,33 @@ Generate interactive charts from SQL query results with support for stacked bar 
   - For bar charts: creates grouped or stacked bars based on `chart_style`
   - For line/scatter: creates separate series with different colors
 - `title` (optional): Chart title (auto-generated if not provided)
-- `chart_library` (optional): 'matplotlib' or 'plotly' (default: matplotlib)
 - `chart_style` (optional): 'grouped' or 'stacked' for bar charts
   - 'grouped': Bars side-by-side for comparison
   - 'stacked': Bars stacked on top (requires `color_column` for two dimensions)
 - `width` (optional): Chart width in pixels (default: 800)
 - `height` (optional): Chart height in pixels (default: 600)
+- `output_format` (optional): 'image' (default) or 'interactive'
+  - 'image': Returns PNG image using kaleido (works with local MCP servers)
+  - 'interactive': Returns UIResource with embedded Plotly chart (requires remote HTTPS connector for MCP Apps)
 
-**Returns:** FastMCP Image object for direct display in Claude Desktop
+**Returns:**
+- Interactive mode: UIResource with self-contained HTML/Plotly chart
+- Image mode: FastMCP Image object for direct display in Claude Desktop
 
-**Output:** Chart saved to `tmp/chart_{timestamp}.png`
+**Output:** Chart saved to `tmp/chart_{timestamp}.png` (image mode)
 
 **Key Features:**
 
+- **Interactive Plotly charts** with zoom, pan, hover tooltips via MCP-UI
 - **Stacked bar charts** with two dimensions for part-to-whole relationships
 - **Multi-measure line charts** for comparing multiple metrics on the same chart
-- Direct image rendering without base64 encoding for better performance
+- **PNG export** using kaleido for static image output
+- Direct rendering in Claude Desktop via MCP-UI protocol
 
 **Examples:**
 
 ```python
-# Stacked bar chart
+# Interactive stacked bar chart (default)
 result = execute_sql_query("""
     SELECT region, product_type, SUM(revenue) as total
     FROM sales GROUP BY region, product_type
@@ -732,6 +738,9 @@ generate_chart(result['data'], 'bar', 'region', 'total', 'product_type', chart_s
 # Multi-measure line chart comparison
 result = execute_sql_query("SELECT month, revenue, expenses, profit FROM monthly_data ORDER BY month")
 generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'])
+
+# Static PNG image output
+generate_chart(result['data'], 'bar', 'region', 'total', output_format='image')
 ```
 
 #### 12. `get_server_info`
@@ -766,9 +775,8 @@ The server provides **built-in comprehensive instructions** that are automatical
 
 **Chart Generation Enhancement**:
 
-- Simplified to return Image objects directly (no resource URIs)
-- Removed in-memory image store complexity
-- Direct image rendering for better Claude Desktop integration
+- Interactive charts via MCP-UI with Plotly rendering in Claude Desktop
+- Static PNG export using kaleido
 - Charts saved to `tmp/` directory for reference
 
 **Workflow Guidance**:
@@ -980,6 +988,24 @@ Users can confidently use all features documented in this README. The test failu
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📋 Recent Changes
+
+### Version 0.4.1
+
+**Chart Generation Modernization** (Feb 2026):
+
+- **Plotly 6.x upgrade** - Updated from Plotly 5.x to 6.5.2 for improved performance and compatibility
+- **Removed matplotlib/seaborn** - Simplified visualization stack to Plotly-only
+- **Added kaleido 1.2.0** - For PNG export (compatible with Plotly 6.x)
+- **MCP-UI integration** - Interactive charts render directly in Claude Desktop via `mcp-ui-server`
+- **Removed `chart_library` parameter** - No longer needed with single visualization library
+- **New `output_format` parameter** - Choose between 'interactive' (UIResource) or 'image' (PNG)
+- **Self-contained HTML charts** - Interactive mode embeds Plotly data directly in HTML
+
+**Dependencies Updated**:
+- `plotly>=6.1.1` (was `>=5.24.0`)
+- `kaleido>=1.2.0` (new, replaces matplotlib for PNG)
+- `mcp-ui-server>=1.0.0` (for interactive UI rendering)
+- Removed: `matplotlib`, `seaborn`
 
 ### Version 0.4.0
 

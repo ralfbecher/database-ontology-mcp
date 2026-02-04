@@ -62,6 +62,17 @@ def get_output_dir() -> Path:
     return OUTPUT_DIR
 
 
+# --- MCP Apps: Load Chart Viewer HTML ---
+# Load chart viewer HTML app at startup for MCP Apps interactive rendering
+_CHART_VIEWER_HTML_PATH = Path(__file__).parent / "apps" / "chart_viewer.html"
+try:
+    CHART_VIEWER_HTML = _CHART_VIEWER_HTML_PATH.read_text(encoding="utf-8")
+    logger.info(f"Loaded chart viewer HTML app from {_CHART_VIEWER_HTML_PATH}")
+except FileNotFoundError:
+    CHART_VIEWER_HTML = None
+    logger.warning(f"Chart viewer HTML app not found at {_CHART_VIEWER_HTML_PATH}")
+
+
 # --- MCP Server Setup ---
 
 # Create server instance with comprehensive instructions
@@ -340,6 +351,25 @@ analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_s
 **Primary Use Case**: Semantic database analysis with ontology-enhanced Text-to-SQL generation
 """.format(__version__=__version__)
 )
+
+
+# --- MCP Apps: Register Chart Viewer Resource ---
+# This resource serves the interactive chart viewer HTML app for MCP Apps rendering
+# MIME type text/html+mcp is the official MCP Apps MIME type
+@mcp.resource("ui://orionbelt/chart-viewer", mime_type="text/html+mcp")
+def chart_viewer_resource() -> str:
+    """Serve the interactive chart viewer app for MCP Apps.
+
+    This HTML app receives chart data via the MCP Apps postMessage protocol
+    and renders interactive Plotly visualizations in Claude Desktop.
+    """
+    if CHART_VIEWER_HTML is None:
+        return """<!DOCTYPE html>
+<html><body>
+<h1>Chart Viewer Not Available</h1>
+<p>The chart viewer HTML app was not found at startup.</p>
+</body></html>"""
+    return CHART_VIEWER_HTML
 
 
 # --- Dependency Management ---
@@ -2437,22 +2467,31 @@ async def generate_chart(
     y_column: Optional[Union[str, List[str]]] = None,
     color_column: Optional[str] = None,
     title: Optional[str] = None,
-    chart_library: str = "matplotlib",
     chart_style: str = "grouped",
     width: int = 800,
     height: int = 600,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
     output_format: str = "image"
-) -> Union[Image, List[UIResource]]:
+) -> Union[List[UIResource], Image]:
     """Generate interactive charts from SQL query results or data analysis.
 
     ⚠️ IMPORTANT: data_source parameter MUST be valid JSON (array of objects with double quotes)
     NOT a string representation with single quotes. See Args section for correct format.
 
     📊 VISUALIZATION CAPABILITIES:
-    This tool creates professional data visualizations directly in Claude Desktop,
-    supporting both static (Matplotlib) and interactive (Plotly) chart libraries.
+    This tool creates professional data visualizations directly in Claude Desktop.
+    By default, it generates **interactive Plotly charts** that render via MCP Apps,
+    with full zoom, pan, hover tooltips, and export functionality.
+
+    OUTPUT MODES:
+    • **interactive** (default): Returns Plotly JSON data for MCP Apps rendering
+      - Full interactivity: zoom, pan, hover, export to PNG
+      - Renders directly in Claude Desktop chat via MCP Apps
+      - Requires Claude Desktop with MCP Apps support
+    • **image**: Returns static PNG image
+      - Compatible with all MCP clients
+      - Use when MCP Apps is not available
 
     CHART TYPES:
     • **bar**: Bar charts for categorical comparisons
@@ -2473,16 +2512,6 @@ async def generate_chart(
       - Correlation matrices
       - Pivot table visualizations
       - Default sorting: x_column ascending, y_column descending
-
-    LIBRARIES:
-    • **matplotlib** (default): Static PNG charts
-      - Better for simple visualizations
-      - Guaranteed compatibility
-      - Seaborn styling for aesthetics
-    • **plotly**: Interactive HTML/PNG charts
-      - Hover tooltips and zoom
-      - Better for complex data exploration
-      - Falls back to matplotlib if not available
 
     DATA PREPARATION:
     The tool automatically handles:
@@ -2517,24 +2546,22 @@ async def generate_chart(
                      - For bar charts: creates grouped or stacked bars based on chart_style
                      - For line/scatter: creates separate series with different colors
         title: Chart title (auto-generated if not provided)
-        chart_library: 'matplotlib' or 'plotly' (default: matplotlib)
         chart_style: 'grouped' or 'stacked' for bar charts (default: grouped)
                     - 'grouped': bars side-by-side for comparison
                     - 'stacked': bars stacked on top of each other (requires color_column)
         width: Chart width in pixels (default: 800)
         height: Chart height in pixels (default: 600)
-        output_format: Output format for the chart:
-                      - 'image' (default): Returns static PNG image (works in all clients)
-                      - 'ui': Returns interactive UIResource with Plotly HTML (requires MCP-UI support)
-                      When 'ui' is selected, chart_library is automatically set to 'plotly'
         sort_by: Column to sort by (optional). If not specified, uses automatic sorting:
                  - Bar/grouped/stacked: sorts by measure (y_column) descending
                  - Line: sorts by dimension (x_column) ascending
                  - Heatmap: sorts x_column ascending, y_column descending
         sort_order: 'ascending' or 'descending' (optional). If not specified, uses automatic order based on chart type.
+        output_format: 'image' (default) returns static PNG that displays directly in Claude Desktop.
+                      'interactive' returns UIResource for MCP Apps rendering (requires remote HTTPS connector).
 
     Returns:
-        Image object that can be displayed in Claude Desktop
+        For output_format='interactive': JSON string with Plotly chart data (renders via MCP Apps)
+        For output_format='image': Image object that can be displayed in Claude Desktop
 
     Example Usage:
         # 1. Simple bar chart from query results
@@ -2601,8 +2628,8 @@ async def generate_chart(
     - Grid lines and axes are optimized for clarity
 
     PERFORMANCE:
-    - Charts are rendered as PNG and saved to tmp/ directory
-    - Images are returned directly for display in Claude Desktop
+    - Interactive mode: Returns JSON data, rendered client-side via MCP Apps
+    - Image mode: Charts rendered as PNG and saved to tmp/ directory
     - Memory is properly managed (figures closed after rendering)
     - Large datasets are automatically sampled if needed
 
@@ -2610,11 +2637,21 @@ async def generate_chart(
     - Missing libraries trigger helpful installation instructions
     - Invalid column names show available columns
     - Data type mismatches are automatically corrected
-    - Fallback from Plotly to Matplotlib if dependencies missing
+    - Fallback from Plotly to Matplotlib if dependencies missing (image mode)
     """
     # Import the implementation from tools module
     from .tools.chart import generate_chart as generate_chart_impl
     import json
+    import numpy as np
+
+    # Custom JSON encoder to handle numpy arrays from Plotly
+    class NumpyEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            return super().default(obj)
 
     # FALLBACK: Parse data_source if it's incorrectly sent as a string
     # (documentation specifies it should be actual JSON, but some LLMs might send strings)
@@ -2655,71 +2692,82 @@ async def generate_chart(
             # Not a JSON string, keep as-is (it's a column name)
             pass
 
-    # Handle UI output format - returns interactive Plotly HTML wrapped in UIResource
-    if output_format == "ui":
-        try:
-            import pandas as pd
-            from .chart_utils import create_plotly_chart
-
-            # Convert data to DataFrame
-            df = pd.DataFrame(data_source)
-
-            # Validate required columns
-            if x_column not in df.columns:
-                raise RuntimeError(f"X-axis column '{x_column}' not found. Available: {list(df.columns)}")
-
-            # Generate Plotly figure
-            fig = create_plotly_chart(
-                df, chart_type, x_column, y_column, color_column,
-                title or f"{chart_type.title()} Chart", chart_style, width, height, sort_by, sort_order
-            )
-
-            # Convert to interactive HTML
-            chart_html = fig.to_html(
-                full_html=True,
-                include_plotlyjs='cdn',
-                config={
-                    'displayModeBar': True,
-                    'responsive': True,
-                    'scrollZoom': True
-                }
-            )
-
-            # Generate unique chart ID
-            chart_id = f"chart_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-
-            # Create UIResource with the interactive chart
-            ui_resource = create_ui_resource({
-                "uri": f"ui://chart/{chart_id}",
-                "content": {
-                    "type": "rawHtml",
-                    "htmlString": chart_html
-                },
-                "encoding": "text"
-            })
-
-            await ctx.info(f"Interactive chart generated: {chart_id}")
-            return [ui_resource]
-
-        except ImportError as e:
-            await ctx.info("Plotly not available for UI output, falling back to image")
-            logger.warning(f"UI output requires plotly: {e}")
-            # Fall through to image generation
-        except Exception as e:
-            logger.error(f"UI chart generation failed: {e}")
-            raise RuntimeError(f"Failed to generate UI chart: {str(e)}")
-
-    # Default: Call the implementation to get image bytes and chart_id
+    # Call the implementation with appropriate output format
+    logger.info(f"generate_chart called with output_format={output_format}, chart_type={chart_type}")
     result = generate_chart_impl(
         data_source, chart_type, x_column, y_column, color_column,
-        title, chart_library, chart_style, width, height, sort_by, sort_order
+        title, chart_style, width, height, sort_by, sort_order,
+        output_format=output_format
     )
+    logger.info(f"generate_chart_impl returned: {type(result)}, has_error={isinstance(result, dict) and 'error' in result}")
 
-    # Check if chart generation was successful
+    # Check if chart generation failed
     if isinstance(result, dict) and result.get("error"):
         await ctx.info("Chart generation failed")
         raise RuntimeError(result.get("error", "Chart generation failed"))
 
+    # Handle interactive output format (returns UIResource with embedded chart)
+    if output_format == "interactive":
+        if isinstance(result, dict) and "traces" in result:
+            data_points = result.get("metadata", {}).get("data_points", 0)
+            chart_id = result.get("metadata", {}).get("chart_id", "chart")
+
+            # Serialize chart data to JSON
+            chart_json = json.dumps(result, cls=NumpyEncoder)
+
+            # Create self-contained HTML with embedded Plotly chart
+            html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: system-ui, sans-serif; background: #fff; }}
+        #chart {{ width: 100%; height: 100vh; min-height: 400px; }}
+    </style>
+</head>
+<body>
+    <div id="chart"></div>
+    <script>
+        const chartData = {chart_json};
+        const {{ traces, layout, config }} = chartData;
+        const finalConfig = {{
+            displayModeBar: true,
+            responsive: true,
+            scrollZoom: true,
+            displaylogo: false,
+            modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+            ...config
+        }};
+        const finalLayout = {{
+            autosize: true,
+            margin: {{ l: 60, r: 60, t: 60, b: 60 }},
+            ...layout
+        }};
+        Plotly.newPlot('chart', traces, finalLayout, finalConfig);
+        window.addEventListener('resize', () => Plotly.Plots.resize(document.getElementById('chart')));
+    </script>
+</body>
+</html>'''
+
+            # Return UIResource with embedded chart HTML
+            ui_resource = create_ui_resource({
+                "uri": f"ui://orionbelt/chart/{chart_id}",
+                "content": {
+                    "type": "rawHtml",
+                    "htmlString": html_content
+                },
+                "encoding": "text"
+            })
+
+            await ctx.info(f"Interactive chart generated: {chart_type} with {data_points} data points")
+            return [ui_resource]
+        else:
+            await ctx.info("Chart generation failed")
+            raise RuntimeError("Chart generation failed: unexpected result format for interactive mode")
+
+    # Handle image output format (returns PNG bytes)
     if isinstance(result, tuple) and len(result) == 2:
         image_bytes, chart_id = result
 
@@ -2731,7 +2779,7 @@ async def generate_chart(
             await ctx.info("Chart generation failed to save file")
             raise RuntimeError("Failed to save chart image to file")
 
-        await ctx.info(f"Chart generated successfully: {image_file_path}")
+        await ctx.info(f"Chart image generated successfully: {image_file_path}")
 
         # Return Image object for Claude Desktop display
         return Image(path=str(image_file_path))
@@ -2748,39 +2796,25 @@ async def test_ui_resource(ctx: Context) -> List[UIResource]:
     If you see an interactive card, MCP-UI is working correctly.
 
     Returns:
-        A simple UIResource with HTML content
+        A UIResource with HTML content
     """
+    html_content = """<div style="font-family: system-ui, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 24px; border-radius: 12px; max-width: 400px;">
+    <h2 style="margin: 0 0 12px 0;">MCP-UI Test</h2>
+    <p style="margin: 0; opacity: 0.9;">This interactive UI is rendered from an MCP tool result.</p>
+    <span style="background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 16px; display: inline-block;">Orionbelt Semantic Layer</span>
+</div>"""
+
+    await ctx.info("Test UI resource created")
+
+    # Use mcp_ui_server with resource:// URI scheme
     ui_resource = create_ui_resource({
-        "uri": "ui://test/welcome",
+        "uri": "ui://orionbelt/test-card",
         "content": {
             "type": "rawHtml",
-            "htmlString": """
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body { font-family: system-ui, sans-serif; padding: 20px; margin: 0; }
-        .card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white; padding: 24px; border-radius: 12px; max-width: 400px; }
-        h2 { margin: 0 0 12px 0; }
-        p { margin: 0; opacity: 0.9; }
-        .badge { background: rgba(255,255,255,0.2); padding: 4px 8px;
-                 border-radius: 4px; font-size: 12px; margin-top: 16px; display: inline-block; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>🎉 MCP-UI Works!</h2>
-        <p>This interactive UI is rendered from an MCP tool result.</p>
-        <span class="badge">Orionbelt Semantic Layer</span>
-    </div>
-</body>
-</html>
-            """
+            "htmlString": html_content
         },
         "encoding": "text"
     })
-    await ctx.info("Test UI resource created")
     return [ui_resource]
 
 
