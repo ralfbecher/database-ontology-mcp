@@ -21,7 +21,7 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 - **Enhanced connection management** with retry logic and timeout handling
 - **Automatic dependency management** for Snowflake and Dremio connectors
 
-### 🎯 12 Essential Tools
+### 🎯 13 Essential Tools
 
 - **Streamlined workflow** with focused, purpose-built tools
 - **Interactive charting** (`generate_chart`) with direct image rendering
@@ -184,7 +184,7 @@ sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
 database-ontology-mcp/
 ├── src/
 │   ├── __init__.py                 # Package initialization
-│   ├── main.py                     # FastMCP server entry point (12 tools)
+│   ├── main.py                     # FastMCP server entry point (13 tools)
 │   ├── database_manager.py         # Database connection and analysis
 │   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
 │   ├── r2rml_generator.py          # W3C R2RML mapping generation
@@ -465,7 +465,13 @@ Get available database schemas.
 
 **Returns:** `Array<string>` of schema names
 
-#### 3. `analyze_schema`
+#### 3. `reset_cache`
+
+Clear cached schema analysis and ontology data for the current session.
+
+**Returns:** Confirmation of cleared cache items
+
+#### 4. `analyze_schema`
 
 Analyze database schema and return comprehensive table information including relationships.
 
@@ -487,7 +493,7 @@ Analyze database schema and return comprehensive table information including rel
 - **Automatic R2RML generation** with W3C-compliant mappings
 - File paths included in response for easy access
 
-#### 4. `generate_ontology`
+#### 5. `generate_ontology`
 
 Generate RDF/OWL ontology from database schema with SQL mapping annotations.
 
@@ -503,7 +509,7 @@ Generate RDF/OWL ontology from database schema with SQL mapping annotations.
 
 ### Semantic Name Resolution Tools
 
-#### 5. `suggest_semantic_names`
+#### 6. `suggest_semantic_names`
 
 Extract and analyze names from a generated ontology to identify abbreviations and cryptic names for business-friendly improvements.
 
@@ -524,7 +530,7 @@ Extract and analyze names from a generated ontology to identify abbreviations an
 
 **Name Detection:** Automatically detects abbreviations (`cust`, `ord`, `amt`), cryptic suffixes (`_dt`, `_cd`, `_no`), technical prefixes (`pk_`, `fk_`, `tbl_`), and all-caps acronyms.
 
-#### 6. `apply_semantic_names`
+#### 7. `apply_semantic_names`
 
 Apply LLM-suggested semantic names to the ontology, updating labels and adding business descriptions.
 
@@ -582,7 +588,7 @@ suggest_semantic_names(schema_name="public")
 apply_semantic_names(suggestions='{"classes": [{"original_name": "cust", "suggested_name": "Customer", "description": "Customer entity"}]}')
 ```
 
-#### 7. `load_my_ontology`
+#### 8. `load_my_ontology`
 
 Load a custom .ttl ontology file from an import folder to use as semantic context.
 
@@ -620,7 +626,7 @@ load_my_ontology(import_folder="/path/to/my/ontologies")
 
 ### Data & Validation Tools
 
-#### 8. `sample_table_data`
+#### 9. `sample_table_data`
 
 Secure data sampling with comprehensive validation.
 
@@ -634,7 +640,7 @@ Secure data sampling with comprehensive validation.
 }
 ```
 
-#### 9. `validate_sql_syntax`
+#### 10. `validate_sql_syntax`
 
 Advanced SQL validation with comprehensive analysis.
 
@@ -654,7 +660,7 @@ Advanced SQL validation with comprehensive analysis.
 
 **Features:** Multi-database syntax checking, injection detection, performance analysis
 
-#### 10. `execute_sql_query`
+#### 11. `execute_sql_query`
 
 Safe SQL execution with comprehensive safety protocols.
 
@@ -682,7 +688,7 @@ FROM sales s LEFT JOIN returns r ON s.customer_id = r.customer_id
 GROUP BY customer_id;  -- This multiplies sales_amount incorrectly!
 ```
 
-#### 11. `generate_chart`
+#### 12. `generate_chart`
 
 Generate interactive charts from SQL query results with support for stacked bar charts and multi-measure line charts. Uses Plotly for visualization with MCP-UI support for interactive rendering in Claude Desktop.
 
@@ -743,7 +749,7 @@ generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'
 generate_chart(result['data'], 'bar', 'region', 'total', output_format='image')
 ```
 
-#### 12. `get_server_info`
+#### 13. `get_server_info`
 
 Comprehensive server status and configuration information.
 
@@ -781,7 +787,7 @@ The server provides **built-in comprehensive instructions** that are automatical
 
 **Workflow Guidance**:
 
-- Added FastMCP Context parameter to all 9 tools
+- Added FastMCP Context parameter to all tools
 - Automatic next-tool suggestions after each operation
 - Comprehensive server instructions for optimal workflows
 - Built-in fan-trap prevention guidance

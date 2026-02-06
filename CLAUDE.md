@@ -44,7 +44,7 @@ bandit -r src/
 ### Core Components
 
 - **`server.py`** - Entry point with startup logging and signal handling
-- **`src/main.py`** (~2400 lines) - FastMCP server with 11 MCP tools as `@mcp.tool()` async decorators
+- **`src/main.py`** (~2800 lines) - FastMCP server with 13 MCP tools as `@mcp.tool()` async decorators
 - **`src/database_manager.py`** (~1900 lines) - Connection pooling, schema analysis, SQLAlchemy integration
 - **`src/ontology_generator.py`** (~900 lines) - RDF/OWL generation using rdflib with `db:` namespace annotations
 - **`src/r2rml_generator.py`** (~360 lines) - W3C R2RML mapping generation
@@ -74,7 +74,7 @@ class SessionData:
 
 ### MCP Tools (in `src/main.py`)
 
-`connect_database`, `list_schemas`, `analyze_schema`, `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`, `sample_table_data`, `validate_sql_syntax`, `execute_sql_query`, `generate_chart`, `get_server_info`
+`connect_database`, `list_schemas`, `reset_cache`, `analyze_schema`, `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`, `sample_table_data`, `validate_sql_syntax`, `execute_sql_query`, `generate_chart`, `get_server_info`
 
 ## Configuration
 
