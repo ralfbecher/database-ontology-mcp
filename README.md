@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repository has been archived.** Development continues in the following projects:
+> - [Orionbelt Analytics](https://github.com/ralfbecher/orionbelt-analytics) — Analytics platform
+> - [Orionbelt Semantic Layer](https://github.com/ralfbecher/orionbelt-semantic-layer) — Semantic layer MCP server
+
 # Orionbelt Semantic Layer
 
 **Orionbelt Semantic Layer - the Ontology-based MCP server for your Text-2-SQL convenience.**
